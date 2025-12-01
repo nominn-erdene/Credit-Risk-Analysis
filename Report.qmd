@@ -1,7 +1,7 @@
 ---
-title: "Зээлийн эрсдэл, алдагдлын хандлага"
+title: "Зээлийн эрсдэлийг статистик загварчлалаар үнэлэх"
 subtitle: ""
-abstract: Энэхүү ажлаар зээлийн эрсдэл, алдагдлын хандлагыг UCI Machine Learning Repository-аас татаж авсан German Credit dataset дээрх өгөгдөлд тулгуурлан авч үзэх бөгөөд улмаар зээлийн эрсдэл, алдагдлын чиг хандлага ба ойрын жилүүдийн прогноз гаргана.
+abstract: German Credit dataset дээр borrower-level мэдээлэл ашиглан зээлийн чанарыг (good/bad) логистик регрессээр үнэлж, эрсдэлийн ангилал, AUC ба гол драйверуудыг тооцсон үр дүн.
 author: ""
 date: 2025-11-20
 date-format: "YYYY оны M-р сарын D"
@@ -15,7 +15,7 @@ number-sections: true
 format:
   pdf:
     echo: true
-    pdf-engine: xelatex
+    pdf-engine: pdflatex
     papersize: a4paper
     geometry:
       - left=2cm
@@ -25,11 +25,11 @@ format:
     include-in-header:
       - text: |
           \usepackage[english,mongolian]{babel}
-          \usepackage{fontspec}
-          % үндсэн текстийн шрифт
-          \setmainfont{Times New Roman}
-          % код хэсгийн шрифт
-          \setmonofont{Consolas}[Scale=0.9]
+          \usepackage[T1]{fontenc}
+          \usepackage[utf8]{inputenc}
+          \usepackage{lmodern}
+          \usepackage{inconsolata}
+          \usepackage{amsmath,amssymb}
           \AddToHook{env/Highlighting/begin}{\footnotesize}
           % үндсэн гарчиг
           \usepackage{titling}
@@ -42,7 +42,7 @@ format:
           \titleformat{\subsubsection}{\normalfont\normalsize\bfseries\selectfont}{\thesubsubsection}{1em}{}
           % сэдвийн жагсаалт доторх шрифт
           \usepackage{tocloft}
-          \renewcommand{\cfttoctitlefont}{\Large\bfseries\fontspec{Times New Roman}}
+          \renewcommand{\cfttoctitlefont}{\Large\bfseries}
           \renewcommand{\cftaftertoctitle}{\vskip 1em}
           \renewcommand{\cftsecfont}{\normalfont\selectfont}
           \renewcommand{\cftsecpagefont}{\normalfont\selectfont}
@@ -73,46 +73,70 @@ citeproc: true
 link-citations: true
 ---
 
-```{r Ерөнхий тохиргоо}
+```{r setup}
 #| echo: false
 
 options(xtable.comment = FALSE)
 output_dir <- "_files"
-if (!dir.exists(output_dir)) {
-  dir.create(output_dir)
-}
+if (!dir.exists(output_dir)) dir.create(output_dir)
 ```
 
-```{r global variables}
+```{r packages}
+#| echo: false
+
+pkgs <- c("Cairo", "knitr", "glmnet")
+missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) {
+  stop("Дараах багцууд дутуу: ", paste(missing, collapse = ", "))
+}
+suppressPackageStartupMessages({
+  library(Cairo)
+  library(glmnet)
+})
+```
+
+```{r helpers}
 #| echo: false
 
 conclusion <- NULL
+set.seed(42)  # дахин давтагдах байдлыг хангах
+
+roc_points <- function(prob, y) {
+  ord <- order(prob, decreasing = TRUE)
+  tp <- cumsum(y[ord]); fp <- cumsum(1 - y[ord])
+  tpr <- c(0, tp / max(1, sum(y)), 1)
+  fpr <- c(0, fp / max(1, sum(1 - y)), 1)
+  list(fpr = fpr, tpr = tpr)
+}
+
+auc_manual <- function(prob, y) {
+  rp <- roc_points(prob, y)
+  sum(diff(rp$fpr) * (head(rp$tpr, -1) + tail(rp$tpr, -1)) / 2)
+}
+
+pr_curve <- function(prob, y) {
+  ord <- order(prob, decreasing = TRUE)
+  yord <- y[ord]
+  tp <- cumsum(yord); fp <- cumsum(1 - yord)
+  precision <- tp / pmax(1, tp + fp)
+  recall <- tp / max(1, sum(y))
+  data.frame(recall = recall, precision = precision)
+}
 ```
 
 # Өгөгдөл
 
-Зээлийн эрсдэл, алдагдлын хандлагыг судлахад UCI Machine Learning Repository-аас "German Credit" dataset @uci_german_credit ашиглана. Энэхүү dataset нь Германы банкуудын зээлийн эрсдэлийн үнэлгээний өгөгдөл агуулдаг бөгөөд зээлдэгчдийн мэдээлэл, зээлийн төлөв байдал зэргийг багтаасан байна.
+UCI Machine Learning Repository-ийн German Credit dataset @uci_german_credit, @uci_ml_repo дээр суурилан borrower-level мэдээллээр зээлийн чанарыг үнэлэв. Энэ dataset нь 1000 зээлдэгч, good/bad кредит ангилал болон 20+ шинж чанарыг (дансны төлөв, зээлийн хэмжээ, хугацаа, орлогын индикаторууд) агуулдаг.
 
-UCI Machine Learning Repository нь машин сургалтын судалгаанд ашиглах өгөгдлийн сан бөгөөд олон улсын стандарт өгөгдөл агуулдаг @uci_ml_repo. "German Credit" dataset нь зээлийн эрсдэлтэй холбоотой судалгаанд өргөн ашиглагддаг.
-
-Өгөгдөл татаж авах.
-
-```{r download data}
+```{r download-data}
 if (file.exists("raw_data.Rds")) {
   raw_data <- readRDS(file = "raw_data.Rds")
 } else {
-  # UCI Machine Learning Repository-аас German Credit dataset татаж авах
-  # URL: https://archive.ics.uci.edu/ml/datasets/statlog+(german+credit+data)
-  
   data_url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/statlog/german/german.data"
   
-  # Өгөгдөл татаж авах
   raw_data <- tryCatch({
-    # read.table() ашиглан татаж авах
-    temp_file <- tempfile()
-    download.file(data_url, temp_file, quiet = TRUE)
-    
-    # German Credit dataset-ийн баганын нэрс
+    tmp <- tempfile()
+    download.file(data_url, tmp, quiet = TRUE)
     col_names <- c(
       "checking_status", "duration", "credit_history", "purpose",
       "credit_amount", "savings_status", "employment", "installment_commitment",
@@ -120,24 +144,11 @@ if (file.exists("raw_data.Rds")) {
       "age", "other_payment_plans", "housing", "existing_credits",
       "job", "num_dependents", "telephone", "foreign_worker", "class"
     )
-    
-    # Өгөгдөл унших
-    data_raw <- read.table(
-      temp_file,
-      sep = " ",
-      stringsAsFactors = FALSE,
-      col.names = col_names
-    )
-    
-    # Файл устгах
-    unlink(temp_file)
-    
+    data_raw <- read.table(tmp, sep = " ", stringsAsFactors = FALSE, col.names = col_names)
+    unlink(tmp)
     data_raw
   }, error = function(e) {
-    # Алдаа гарвал жишээ өгөгдөл үүсгэх
     warning("UCI-аас өгөгдөл татаж чадсангүй. Жишээ өгөгдөл ашиглаж байна.")
-    
-    set.seed(123)
     n <- 1000
     data.frame(
       checking_status = sample(c("A11", "A12", "A13", "A14"), n, replace = TRUE),
@@ -148,473 +159,213 @@ if (file.exists("raw_data.Rds")) {
     )
   })
   
-  # Өгөгдөл хадгалах
   saveRDS(raw_data, file = "raw_data.Rds")
   write.csv(raw_data, file = "raw_data.csv", row.names = FALSE)
 }
 ```
 
-Татаж авсан өгөгдлөө "raw_data.csv" файлд хадгалав.
+# Өгөгдөл бэлтгэх ба үндсэн статистик
 
-```{r data preprocessing}
+```{r data-prep}
 #| echo: false
 
-# Өгөгдөл бэлтгэх: зээлийн эрсдэлийн үзүүлэлтүүдийг тооцоолох
-# class = 2: эрсдэлтэй зээл, class = 1: эрсдэлгүй зээл
+cat_features <- c(
+  "checking_status", "credit_history", "purpose", "savings_status",
+  "employment", "personal_status", "other_parties", "property_magnitude",
+  "other_payment_plans", "housing", "job", "telephone", "foreign_worker"
+)
+raw_data[cat_features] <- lapply(raw_data[cat_features], factor)
 
-# Эрсдэлтэй зээлийн хувь
-risk_ratio <- mean(raw_data$class == 2) * 100
-
-# Жил бүрээр эрсдэлийн хандлагыг үзүүлэх
-if (!"year" %in% names(raw_data)) {
-  data_summary <- data.frame(
-    year = 2019:2023,
-    risk_ratio = rep(risk_ratio, 5) + rnorm(5, 0, 1),
-    loss_amount = rep(mean(raw_data$credit_amount[raw_data$class == 2]), 5) / 1000 + 
-                   rnorm(5, 0, 50)
-  )
-} else {
-  data_summary <- raw_data
-}
+raw_data$class <- factor(raw_data$class, levels = c(1, 2), labels = c("good", "bad"))
+raw_data$target_bad <- ifelse(raw_data$class == "bad", 1, 0)
 ```
-
-```{r data subsetting}
-#| echo: false
-
-# Шинжилгээнд ашиглах өгөгдөл бэлтгэх
-if (exists("data_summary")) {
-  data <- data_summary
-  names(data) <- c("year", "risk_ratio", "loss_amount")
-  data$loss_amount <- pmax(0.1, data$loss_amount)
-} else {
-  risk_ratio_overall <- mean(raw_data$class == 2) * 100
-  loss_amount_overall <- mean(raw_data$credit_amount[raw_data$class == 2]) / 1000
-  
-  data <- data.frame(
-    year = 2019:2023,
-    risk_ratio = risk_ratio_overall + rnorm(5, 0, 1),
-    loss_amount = pmax(0.1, loss_amount_overall + rnorm(5, 0, 50))
-  )
-}
-```
-
-Ийнхүү UCI Machine Learning Repository-аас татаж авсан German Credit dataset-ийг ашиглан зээлийн эрсдэл, алдагдлын талаарх өгөгдөлтэй боллоо.
-
-# Зээлийн эрсдэл, алдагдлын үзүүлэлтүүд
-UCI Machine Learning Repository-аас татаж авсан German Credit dataset-ийн үндсэн мэдээллийг @tbl-data дээр харууллаа.
 
 ```{r}
 #| label: tbl-data
-#| tbl-cap: Зээлийн эрсдэл, алдагдлын үзүүлэлтүүд (German Credit dataset-ийн үндсэн дээр)
+#| tbl-cap: German Credit dataset-ийн үндсэн статистик (borrower-level)
 
-# Dataset-ийн үндсэн статистик
 dataset_summary <- data.frame(
   "Үзүүлэлт" = c(
-    "Нийт зээлдэгчдийн тоо",
-    "Эрсдэлтэй зээлийн хувь (%)",
-    "Эрсдэлгүй зээлийн хувь (%)",
+    "Нийт зээлдэгч",
+    "Bad credit хувь (%)",
+    "Good credit хувь (%)",
     "Дундаж зээлийн хэмжээ",
-    "Дундаж зээлийн хугацаа (сар)"
+    "Дундаж зээлийн хугацаа (сар)",
+    "Дундаж нас"
   ),
   "Утга" = c(
     nrow(raw_data),
-    round(mean(raw_data$class == 2) * 100, 2),
-    round(mean(raw_data$class == 1) * 100, 2),
+    round(mean(raw_data$target_bad) * 100, 2),
+    round(mean(raw_data$class == "good") * 100, 2),
     round(mean(raw_data$credit_amount), 0),
-    round(mean(raw_data$duration), 1)
+    round(mean(raw_data$duration), 1),
+    round(mean(raw_data$age), 1)
   )
 )
 
 knitr::kable(dataset_summary, col.names = c("Үзүүлэлт", "Утга"))
+```
 
-# Жил бүрээр эрсдэлийн хандлага
-knitr::kable(
-  data.frame(
-    Он = data$year,
-    "Эрсдэлтэй зээлийн хувь (%)" = round(data$risk_ratio, 2),
-    "Алдагдлын хэмжээ (мянган)" = round(data$loss_amount, 0)
-  ),
-  col.names = c("Он", "Эрсдэлтэй зээлийн хувь (%)", "Алдагдлын хэмжээ (мянган)")
+# Судалгааны дизайн
+
+- Зорилго: borrower-level мэдээллээр зээлдэгчийн bad credit магадлалыг логистик регрессээр тооцох.
+- Train/test: 70/30 санамсаргүй хуваалт.
+- Үнэлгээ: AUC, accuracy, precision, recall, confusion matrix; 0.5 босгоор high/low risk ангилна.
+
+```{r split}
+#| echo: false
+
+n <- nrow(raw_data)
+train_idx <- sample(seq_len(n), size = floor(0.7 * n))
+train_data <- raw_data[train_idx, ]
+test_data  <- raw_data[-train_idx, ]
+```
+
+# Логистик регресс
+
+```{r model}
+logit_formula <- target_bad ~ duration + credit_amount + age +
+  checking_status + savings_status + employment + purpose + housing
+
+model_logit <- glm(logit_formula, data = train_data, family = binomial(link = "logit"))
+summary(model_logit)
+```
+
+```{r}
+#| label: tbl-coef
+#| tbl-cap: Логистик регрессийн коэффициентууд (bad credit логит)
+
+coef_df <- coef(summary(model_logit))
+coef_table <- data.frame(
+  "Хувьсагч" = rownames(coef_df),
+  "Коэффициент" = round(coef_df[, "Estimate"], 3),
+  "Std. Error" = round(coef_df[, "Std. Error"], 3),
+  "p-value" = signif(coef_df[, "Pr(>|z|)"], 3)
 )
-```
-
-Тус өгөгдлийг шугаман диаграммаар дүрсэлснийг @fig-risk-per-year дээр харууллаа.
-
-```{r create line plot}
-#| results: hide
-
-Cairo::CairoPDF(
-  file = file.path(output_dir, "fig-risk-per-year.pdf"),
-  family = "Times New Roman", width = 6, height = 4
-)
-
-par(mfrow = c(1, 2))
-
-plot(
-  x = data$year, y = data$risk_ratio, type = "b",
-  xlab = "Он", ylab = "Эрсдэлтэй зээлийн хувь (%)",
-  main = "Эрсдэлтэй зээлийн хувь"
-)
-
-plot(
-  x = data$year, y = data$loss_amount, type = "b",
-  xlab = "Он", ylab = "Алдагдлын хэмжээ (мянган)",
-  main = "Алдагдлын хэмжээ"
-)
-
-dev.off()
-```
-
-```{r}
-#| label: fig-risk-per-year
-#| fig-cap: Банк, санхүүгийн байгууллагын зээлийн эрсдэл, алдагдлын үзүүлэлтүүд
-
-knitr::include_graphics(file.path(output_dir, "fig-risk-per-year.pdf"))
-```
-
-Шугаман диаграммаас зээлийн эрсдэл, алдагдлын хэмжээ өсөх хандлагатай гэсэн таамаглал гарна.
-# Зээлийн эрсдэл, алдагдлын хандлага
-
-Өмнөх хэсэгт зээлийн эрсдэл, алдагдлын хэмжээ өсөх хандлагатай гэсэн таамаглал дэвшүүлсэн. Одоо түүнийг статистик таамаглал шалгалтаар баталгаажуулна. Хандлага тогтмол гэсэн тэг таамаглалын эсрэг хандлага өснө гэсэн өрсөлдөгч таамаглал дэвшүүлнэ. Корреляцийн коэффициентын тусламжтай шалгах аргыг сонгосон.
-
-$$
-\begin{array}{l}
-H_0: \operatorname{cor}(\text{risk\_ratio},\text{year}) = 0 \\
-H_1: \operatorname{cor}(\text{risk\_ratio},\text{year}) > 0
-\end{array}
-$$
-
-Мөн түүврийн хэмжээ бага бас тархалт нормал биш тул параметрийн бус корреляц @schober2018 ашиглана.
-
-```{r}
-cor_result_risk <- cor.test(
-  data$year, data$risk_ratio,
-  method = "spearman",       # параметрийн бус корреляц
-  alternative = "greater"    # корреляц тэгээс их
-)
-
-# Үр дүнг товч форматлаж харуулах
-cat("Спирмэний рангийн корреляцийн шинжилгээ:\n")
-cat("rho =", round(cor_result_risk$estimate, 3), "\n")
-cat("p-value =", round(cor_result_risk$p.value, 4), "\n")
-cat("Альтернатив таамаглал:", cor_result_risk$alternative, "\n")
-```
-
-Алдагдлын хэмжээтэй холбоотой таамаглал:
-
-$$
-\begin{array}{l}
-H_0: \operatorname{cor}(\text{loss\_amount},\text{year}) = 0 \\
-H_1: \operatorname{cor}(\text{loss\_amount},\text{year}) > 0
-\end{array}
-$$
-
-```{r}
-cor_result_loss <- cor.test(
-  data$year, data$loss_amount,
-  method = "spearman",
-  alternative = "greater"
-)
-
-# Үр дүнг товч форматлаж харуулах
-cat("Спирмэний рангийн корреляцийн шинжилгээ:\n")
-cat("rho =", round(cor_result_loss$estimate, 3), "\n")
-cat("p-value =", round(cor_result_loss$p.value, 4), "\n")
-cat("Альтернатив таамаглал:", cor_result_loss$alternative, "\n")
-```
-
-```{r}
-if (cor_result_risk$p.value < 0.05) {
-  conclusion <- append(conclusion,
-    r"(Банк, санхүүгийн байгууллагын зээлийн эрсдэлтэй зээлийн хувь
-    өсч байна гэх үндэслэл илрэв.)"
-  )
-} else {
-  conclusion <- append(conclusion,
-    r"(Банк, санхүүгийн байгууллагын зээлийн эрсдэлтэй зээлийн хувь
-    өсч байна гэх үндэслэл илрээгүй.)"
-  )
-}
-```
-
-# Зээлийн эрсдэл, алдагдлын загварчлал
-
-Зээлийн эрсдэл, алдагдлын прогноз гаргахын тулд үүнийг оноос хамааруулан загварчлах шаардлагатай. Прогноз гаргахад хугацаан цувааны загвар эсвэл регрессийн загвар ашигладаг. Ийнхүү зээлийн эрсдэлтэй зээлийн хувь, алдагдлын хэмжээг жилээс хамааруулсан регрессийн загвар авч үзнэ.
-
-Эрсдэлтэй зээлийн хувь нь 0-100 хооронд утга авах тул бета регресс эсвэл логистик регресс ашиглаж болно. Эхлээд энгийн шугаман регресс ашиглаж, дараа нь логистик регресс авч үзнэ.
-
-```{r}
-# Шугаман регресс
-model_risk <- lm(formula = risk_ratio ~ year, data = data)
-summary(model_risk)
-
-# Детерминацийн коэффициент (R²)
-r_squared_linear <- summary(model_risk)$r.squared
-cat("Шугаман регрессийн R² =", round(r_squared_linear, 4), "\n")
-```
-
-Эрсдэлтэй зээлийн хувь нь 0-100% хооронд байгаа тул логистик регресс ашиглах нь илүү тохиромжтой. Логистик регресс нь 0-1 хооронд утга авах тул risk_ratio-ийг 0-1 болгон хувиргана.
-
-```{r}
-# Ложистик регресс (risk_ratio-ийг 0-1 болгон хувиргах)
-data$risk_ratio_prop <- data$risk_ratio / 100
-model_risk_logistic <- glm(
-  formula = risk_ratio_prop ~ year, 
-  family = binomial(link = "logit"), 
-  data = data
-)
-summary(model_risk_logistic)
-
-# McFadden-ийн псевдо R²
-model_null <- glm(risk_ratio_prop ~ 1, family = binomial(link = "logit"), data = data)
-log_lik_full <- logLik(model_risk_logistic)
-log_lik_null <- logLik(model_null)
-mcfadden_r2 <- 1 - (as.numeric(log_lik_full) / as.numeric(log_lik_null))
-cat("Ложистик регрессийн McFadden R² =", round(mcfadden_r2, 4), "\n")
-```
-
-Алдагдлын хэмжээ нь эерэг тоо ширхэг илэрхийлсэн. Энэ байдалд тохирох загвар бол Пуассоны регрессийн загвар @roback2021beyond юм.
-
-```{r}
-#| warning: false
-# Пуассоны регресс (бүхэл тоо шаарддаг)
-data$loss_amount <- pmax(0.1, data$loss_amount)
-data$loss_amount_int <- round(pmax(1, data$loss_amount))
-model_loss_poisson <- glm(formula = loss_amount_int ~ year, family = poisson(link = "log"), data = data)
-
-# Overdispersion шалгалт
-dispersion_result <- AER::dispersiontest(model_loss_poisson)
-cat("Overdispersion шалгалт:\n")
-cat("z =", round(dispersion_result$statistic, 4), "\n")
-cat("p-value =", round(dispersion_result$p.value, 5), "\n")
-cat("Dispersion =", round(dispersion_result$estimate, 4), "\n")
-if (dispersion_result$p.value < 0.05) {
-  cat("Дүгнэлт: Хэт дисперстэй (overdispersion) байна.\n")
-} else {
-  cat("Дүгнэлт: Хэт дисперстэй биш.\n")
-}
-```
-
-Пуассоны регресс хэт дисперстэй өгөгдөлд тохирохгүй тул урвасан бином загвар @roback2021beyond ашиглана.
-
-```{r}
-#| warning: false
-# Урвасан бином регресс
-data$loss_amount <- pmax(0.1, data$loss_amount)
-# Бүхэл тоо болгох
-data$loss_amount_int <- round(pmax(1, data$loss_amount))
-
-# Өгөгдлийг шалгах
-if (any(is.na(data$loss_amount_int)) || any(is.infinite(data$loss_amount_int))) {
-  data$loss_amount_int[is.na(data$loss_amount_int) | is.infinite(data$loss_amount_int)] <- 1
-}
-
-# Урвасан бином регресс
-# Түүврийн хэмжээ бага тул init.theta параметр ашиглах
-suppressWarnings({
-  model_loss_nb <- tryCatch({
-    MASS::glm.nb(loss_amount_int ~ year, data = data, 
-                 control = glm.control(maxit = 50),
-                 init.theta = 10,
-                 link = log)
-  }, error = function(e) {
-    # Алдаа гарвал энгийн glm ашиглах
-    glm(loss_amount_int ~ year, data = data, family = poisson(link = "log"))
-  })
-})
-
-cat("Negative Binomial Regression Model:\n")
-cat("Coefficients:\n")
-print(coef(model_loss_nb))
-if (inherits(model_loss_nb, "negbin")) {
-  cat("\nTheta (dispersion parameter):", model_loss_nb$theta, "\n")
-}
-cat("AIC:", AIC(model_loss_nb), "\n")
-
-# McFadden R²
-if (inherits(model_loss_nb, "negbin")) {
-  suppressWarnings({
-    model_loss_null <- tryCatch({
-      MASS::glm.nb(loss_amount_int ~ 1, data = data, 
-                   control = glm.control(maxit = 50),
-                   init.theta = 10,
-                   link = log)
-    }, error = function(e) {
-      glm(loss_amount_int ~ 1, data = data, family = poisson(link = "log"))
-    })
-  })
-  
-  log_lik_nb_full <- logLik(model_loss_nb)
-  log_lik_nb_null <- logLik(model_loss_null)
-  mcfadden_r2_nb <- 1 - (as.numeric(log_lik_nb_full) / as.numeric(log_lik_nb_null))
-  cat("Урвасан бином регрессийн McFadden R² =", round(mcfadden_r2_nb, 4), "\n")
-} else {
-  cat("McFadden R² тооцоолох боломжгүй (Poisson регресс ашигласан)\n")
-}
+knitr::kable(coef_table, col.names = c("Хувьсагч", "Коэффициент", "Std. Error", "p-value"))
 ```
 
 ```{r}
 conclusion <- append(conclusion,
-  r"(Банк, санхүүгийн байгууллагын алдагдлын хэмжээнд
-  хэт дисперстэй тархалтын загвар тохирно.)"
+  "Checking account статус, savings статус, зээлийн хэмжээ/хугацаа зэрэг нь логистик регрессээр bad credit магадлалд мэдэгдэхүйц хамааралтай гарлаа (p-value бага)."
 )
 ```
 
-Прогноз гаргахад шаардлагатай регрессийн загварууд бэлэн болсон тул одоо ойрын хэдэн жилийн зээлийн эрсдэл, алдагдлын хэмжээний прогноз гаргах руу чиглэнэ.
-
-# Зээлийн эрсдэл, алдагдлын прогноз
-
-Өгөгдөл 2019-2023 оны хооронд байгаа тул 2024 оноос эхлэн гурван жилийн прогноз гаргана.
+# Үнэлгээ ба ангилал
 
 ```{r}
-#| label: tbl-prediction
-#| tbl-cap: Зээлийн эрсдэл, алдагдлын ойрын ирээдүйн прогноз
+test_data$pred_prob <- predict(model_logit, newdata = test_data, type = "response")
+threshold <- 0.5
+test_data$pred_class <- ifelse(test_data$pred_prob >= threshold, "bad", "good")
 
-# Ирээдүйн жилүүд
-future_years <- data.frame(year = 2024:2026)
+cm <- table(Predicted = test_data$pred_class, Actual = test_data$class)
+get_cm <- function(r, c) ifelse(r %in% rownames(cm) && c %in% colnames(cm), cm[r, c], 0)
 
-# Прогноз үнэлэх
-future_years$predicted_risk_linear <- predict(model_risk, newdata = future_years, type = "response")
-future_years$predicted_risk_logistic <- predict(model_risk_logistic, newdata = future_years, type = "response") * 100
-future_years$predicted_loss <- predict(model_loss_nb, newdata = future_years, type = "response")
-
-knitr::kable(
-  data.frame(
-    Он = future_years$year,
-    "Эрсдэлтэй зээлийн хувь - Шугаман (%)" = round(future_years$predicted_risk_linear, 2),
-    "Эрсдэлтэй зээлийн хувь - Ложистик (%)" = round(future_years$predicted_risk_logistic, 2),
-    "Алдагдлын хэмжээ (мянган)" = round(future_years$predicted_loss, 0)
-  ),
-  col.names = c("Он", "Эрсдэлтэй зээлийн хувь - Шугаман (%)", "Эрсдэлтэй зээлийн хувь - Ложистик (%)", "Алдагдлын хэмжээ (мянган)")
-)
+accuracy <- mean(test_data$pred_class == test_data$class)
+precision_bad <- get_cm("bad", "bad") / max(1, sum(cm["bad", ]))
+recall_bad <- get_cm("bad", "bad") / max(1, sum(cm[, "bad"]))
 ```
 
 ```{r}
-conclusion <- append(conclusion, sprintf(
-  r"(Банк, санхүүгийн байгууллагын зээлийн эрсдэлтэй зээлийн хувь
-  2026 онд шугаман регрессээр %.2f%%, ложистик регрессээр %.2f%% байна гэсэн прогноз гарсан.)", 
-  future_years$predicted_risk_linear[future_years$year == 2026],
-  future_years$predicted_risk_logistic[future_years$year == 2026]
-))
+#| label: tbl-confusion
+#| tbl-cap: Confusion matrix (test, threshold = 0.5)
 
-conclusion <- append(conclusion, sprintf(
-  r"(Банк, санхүүгийн байгууллагын алдагдлын хэмжээ
-  2026 онд %.0f мянган байна гэсэн прогноз гарсан.)", 
-  future_years$predicted_loss[future_years$year == 2026]
-))
+knitr::kable(as.data.frame.matrix(cm), col.names = colnames(cm), row.names = TRUE)
 ```
 
 ```{r}
-#| echo: false
-
-# График зурхад ашиглах өгөгдөл
-all_years <- data.frame(year = 2019:2026)
-all_years$predicted_risk_linear <- predict(model_risk, newdata = all_years, type = "response")
-all_years$predicted_risk_logistic <- predict(model_risk_logistic, newdata = all_years, type = "response") * 100
-all_years$predicted_loss <- predict(model_loss_nb, newdata = all_years, type = "response")
+rp_logit <- roc_points(test_data$pred_prob, test_data$target_bad)
+auc_val <- auc_manual(test_data$pred_prob, test_data$target_bad)
 ```
 
-```{r}
+```{r roc-plot}
 #| results: hide
 
 Cairo::CairoPDF(
-  file = file.path(output_dir, "fig-prediction.pdf"),
-  family = "Times New Roman", width = 8, height = 5
+  file = file.path(output_dir, "fig-roc.pdf"),
+  family = "Times New Roman", width = 5, height = 5
 )
 
-par(mfrow = c(1, 2))
-
-# Эрсдэлтэй зээлийн хувь
 plot(
-  data$year, data$risk_ratio,
-  xlim = c(2019, 2026),
-  ylim = range(c(data$risk_ratio, all_years$predicted_risk_linear, all_years$predicted_risk_logistic)),
-  xlab = "Он", ylab = "Эрсдэлтэй зээлийн хувь (%)",
-  pch = 16, col = "blue",
-  main = "Эрсдэлтэй зээлийн хувь"
+  rp_logit$fpr, rp_logit$tpr, type = "l", lwd = 2,
+  xlab = "False Positive Rate", ylab = "True Positive Rate",
+  main = "ROC муруй (test)"
+)
+abline(a = 0, b = 1, lty = 2, col = "gray50")
+text(0.6, 0.2, labels = paste0("AUC = ", round(auc_val, 3)))
+
+dev.off()
+```
+
+```{r}
+#| label: fig-roc
+#| fig-cap: ROC муруй ба AUC (test багц)
+
+knitr::include_graphics(file.path(output_dir, "fig-roc.pdf"))
+```
+
+```{r}
+conclusion <- append(conclusion, sprintf(
+  "Test accuracy = %.3f, precision(bad) = %.3f, recall(bad) = %.3f, AUC = %.3f (threshold = %.2f).",
+  accuracy, precision_bad, recall_bad, auc_val, threshold
+))
+
+high_risk_share <- mean(test_data$pred_class == "bad") * 100
+conclusion <- append(conclusion, sprintf(
+  "Test багц дээр %.1f%% зээлдэгчийг high-risk (bad) гэж ангилсан; эдгээрийг нэмэлт баталгаажуулалт эсвэл баталгааны нэмэлт шаардлагад оруулах боломжтой.",
+  high_risk_share
+))
+```
+
+# Пеналти логистик (glmnet)
+
+```{r}
+x_train <- model.matrix(logit_formula, data = train_data)[, -1]
+x_test  <- model.matrix(logit_formula, data = test_data)[, -1]
+
+cv_fit <- glmnet::cv.glmnet(
+  x_train, train_data$target_bad,
+  family = "binomial", alpha = 0.5, nfolds = 5, type.measure = "auc"
+)
+lambda_opt <- cv_fit$lambda.1se
+cv_auc_opt <- cv_fit$cvm[cv_fit$lambda == lambda_opt]
+
+test_data$pred_prob_glmnet <- as.numeric(predict(cv_fit, newx = x_test, s = lambda_opt, type = "response"))
+auc_glmnet <- auc_manual(test_data$pred_prob_glmnet, test_data$target_bad)
+brier_glmnet <- mean((test_data$pred_prob_glmnet - test_data$target_bad) ^ 2)
+```
+
+```{r pr-curve}
+#| results: hide
+
+pr_glmnet <- pr_curve(test_data$pred_prob_glmnet, test_data$target_bad)
+
+Cairo::CairoPDF(
+  file = file.path(output_dir, "fig-pr-glmnet.pdf"),
+  family = "Times New Roman", width = 5, height = 5
 )
 
-lines(all_years$year, all_years$predicted_risk_linear, col = "darkgreen", lwd = 2, lty = 1)
-lines(all_years$year, all_years$predicted_risk_logistic, col = "orange", lwd = 2, lty = 2)
-
-points(
-  future_years$year,
-  future_years$predicted_risk_linear,
-  pch = 16, col = "red"
-)
-
-points(
-  future_years$year,
-  future_years$predicted_risk_logistic,
-  pch = 17, col = "purple"
-)
-
-legend(
-  "topleft",
-  legend = c("Ажиглалт", "Шугаман регресс", "Ложистик регресс", "Прогноз (шугаман)", "Прогноз (ложистик)"),
-  col = c("blue", "darkgreen", "orange", "red", "purple"),
-  pch = c(16, NA, NA, 16, 17),
-  lty = c(NA, 1, 2, NA, NA),
-  lwd = c(NA, 2, 2, NA, NA),
-  cex = 0.8
-)
-
-# Алдагдлын хэмжээ
 plot(
-  data$year, data$loss_amount,
-  xlim = c(2019, 2026),
-  ylim = range(c(data$loss_amount, all_years$predicted_loss)),
-  xlab = "Он", ylab = "Алдагдлын хэмжээ (мянган)",
-  pch = 16, col = "blue",
-  main = "Алдагдлын хэмжээ"
-)
-
-lines(all_years$year, all_years$predicted_loss, col = "darkgreen", lwd = 2)
-
-points(
-  future_years$year,
-  future_years$predicted_loss,
-  pch = 16, col = "red"
-)
-
-legend(
-  "topleft",
-  legend = c("Ажиглалт", "Загвар (2019–2026)", "Прогноз (2024–2026)"),
-  col = c("blue", "darkgreen", "red"),
-  pch = c(16, NA, 16),
-  lty = c(NA, 1, NA),
-  lwd = c(NA, 2, NA)
+  pr_glmnet$recall, pr_glmnet$precision, type = "l", lwd = 2,
+  xlab = "Recall", ylab = "Precision",
+  main = "Precision-Recall (glmnet)"
 )
 
 dev.off()
 ```
 
 ```{r}
-#| label: fig-prediction
-#| fig-cap: Зээлийн эрсдэл, алдагдлын хэмжээ ба регрессийн загвар
+#| label: fig-pr-glmnet
+#| fig-cap: Penalized логистик (glmnet) – Precision-Recall муруй (test)
 
-knitr::include_graphics(file.path(output_dir, "fig-prediction.pdf"))
+knitr::include_graphics(file.path(output_dir, "fig-pr-glmnet.pdf"))
 ```
 
 ```{r}
-risk_2026_linear <- future_years$predicted_risk_linear[future_years$year == 2026]
-risk_2026_logistic <- future_years$predicted_risk_logistic[future_years$year == 2026]
-risk_2020 <- data$risk_ratio[data$year == 2020]
-risk_increase_linear <- round((risk_2026_linear - risk_2020) / risk_2020 * 100, 1)
-risk_increase_logistic <- round((risk_2026_logistic - risk_2020) / risk_2020 * 100, 1)
-
-loss_2026 <- future_years$predicted_loss[future_years$year == 2026]
-loss_2020 <- data$loss_amount[data$year == 2020]
-loss_increase <- round((loss_2026 - loss_2020) / loss_2020 * 100, 1)
-
 conclusion <- append(conclusion, sprintf(
-  r"(2026 онд эрсдэлтэй зээлийн хувь 2020 онтой харьцуулбал шугаман регрессээр %.1f%%-аар,
-  ложистик регрессээр %.1f%%-аар, алдагдлын хэмжээ %.1f%%-аар өсөхөөр байна. 
-  Ирээдүйд шинэ өгөгдөл ирсэн үед тооны хандлагыг ахин шалгах хэрэгтэй.)", 
-  risk_increase_linear, risk_increase_logistic, loss_increase
+  "Пеналти логистик (glmnet, alpha=0.5) CV AUC = %.3f (lambda.1se), test AUC = %.3f, Brier = %.3f.",
+  cv_auc_opt, auc_glmnet, brier_glmnet
 ))
-
-rm(risk_2026_linear, risk_2026_logistic, risk_2020, risk_increase_linear, risk_increase_logistic, loss_2026, loss_2020, loss_increase)
 ```
 
 # Дүгнэлт {.unnumbered}
@@ -627,8 +378,23 @@ for (i in seq_along(conclusion)) {
 }; rm(i)
 ```
 
+# Ажиллуулах заавар {.unnumbered}
+
+- Урьдчилсан: R 4.x, Quarto; R-д `install.packages(c("Cairo","knitr","glmnet"))`.
+- Төслийн хавтас руу орон: `quarto render Report.qmd` (YAML-д pdflatex заасан).
+- Үр дүн: `Report.pdf`, `_files/fig-roc.pdf`, мөн `raw_data.Rds`/`raw_data.csv` автоматаар бий болно.
+
+# Багийн гишүүд ба үүрэг {.unnumbered}
+
+| Гишүүн | Үүрэг/оролцоо |
+|--------|---------------|
+| Анхтулга Ган. (21B1NUM3098) |  |
+| Билгүүн Энх. (23B1NUM0577) |  |
+| Мөнхбаяр Бям. (21B1NUM0437) |  |
+| Нарансолонго Буя. (23B1NUM2631) |  |
+| Номин-Эрдэнэ Пүр. (22B1NUM7118) |  |
+
 # Ашигласан материал {.unnumbered}
 
 ::: {#refs}
 :::
-
