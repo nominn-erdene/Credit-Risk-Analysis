@@ -1,0 +1,27 @@
+# Jupyter Book тохиргоо
+title: "Зээлийн эрсдэл, алдагдлын хандлага"
+author: "Г.Махгал"
+logo: ""
+
+# HTML тохиргоо
+html:
+  baseurl: ""
+  theme:
+    primary: blue
+    accent: orange
+  use_edit_page_button: false
+  use_repository_button: false
+  use_issues_button: false
+  use_download_button: true
+  use_fullscreen_button: true
+
+# Execute тохиргоо
+execute:
+  execute_notebooks: force
+  timeout: 300
+  allow_errors: false
+
+# Библиографийн тохиргоо
+bibtex_bibfiles:
+  - references.bib
+

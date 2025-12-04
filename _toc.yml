@@ -1,0 +1,6 @@
+# Jupyter Book агуулгын хүснэгт
+format: jb-book
+root: intro
+chapters:
+  - file: Report
+

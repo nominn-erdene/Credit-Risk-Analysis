@@ -1,0 +1,66 @@
+# Quarto
+_files/
+.quarto/
+*.qmd.bak
+*.qmd.knit.md
+
+# PDF (үүсгэсэн тайлан)
+Report.pdf
+
+# R
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.Rproj.user/
+
+# RDS файлууд (автоматаар үүсэх)
+*.Rds
+raw_data.Rds
+table_info.Rds
+
+# LaTeX
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.fls
+*.fdb_latexmk
+
+# OS файлууд
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python (хэрэв ашиглавал)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Temporary файлууд
+*.tmp
+*.temp
+~$*
+
+# Өгөгдөл (хэрэв том бол)
+# raw_data.csv  # Хэрэв том файл бол uncomment хийх
+

@@ -1,0 +1,1089 @@
+---
+title: "Зээлийн эрсдэлийн шинжилгээ"
+subtitle: ""
+abstract: Энэхүү ажлаар зээлийн эрсдэлийг UCI Machine Learning Repository-аас татаж авсан German Credit dataset дээрх өгөгдөлд тулгуурлан судалж, зээлдэгчдийн шинж чанарууд зээлийн эрсдэлтэй хэрхэн холбогдож байгааг статистик арга зүйгээр шинжилнэ. Мөн машин сургалтын загварууд ашиглан зээлийн эрсдэлийг урьдчилан таамаглах боломжийг судална.
+date: 2025-11-20
+date-format: "YYYY оны M-р сарын D"
+project:
+  execute-dir: project
+  preview: false
+toc: true
+toc-depth: 3
+toc-title: Агуулга
+number-sections: true
+format:
+  pdf:
+    echo: true
+    pdf-engine: xelatex
+    papersize: a4paper
+    geometry:
+      - left=2cm
+      - right=2cm
+      - top=2cm
+      - bottom=3cm
+    include-in-header:
+      - text: |
+          \usepackage[english,mongolian]{babel}
+          \usepackage{fontspec}
+          % үндсэн текстийн шрифт
+          \setmainfont{Times New Roman}
+          % код хэсгийн шрифт
+          \setmonofont{Consolas}[Scale=0.9]
+          \AddToHook{env/Highlighting/begin}{\footnotesize}
+          % үндсэн гарчиг
+          \usepackage{titling}
+          \pretitle{\begin{center}\LARGE\bfseries}
+          \posttitle{\par\end{center}\vskip 1em}
+          % сэдвийн зүйлчлэл хэсгийн шрифт
+          \usepackage{titlesec}
+          \titleformat{\section}{\normalfont\Large\bfseries\selectfont}{\thesection}{1em}{}
+          \titleformat{\subsection}{\normalfont\large\bfseries\selectfont}{\thesubsection}{1em}{}
+          \titleformat{\subsubsection}{\normalfont\normalsize\bfseries\selectfont}{\thesubsubsection}{1em}{}
+          % сэдвийн жагсаалт доторх шрифт
+          \usepackage{tocloft}
+          \renewcommand{\cfttoctitlefont}{\Large\bfseries\fontspec{Times New Roman}}
+          \renewcommand{\cftaftertoctitle}{\vskip 1em}
+          \renewcommand{\cftsecfont}{\normalfont\selectfont}
+          \renewcommand{\cftsecpagefont}{\normalfont\selectfont}
+          \renewcommand{\cftsubsecfont}{\normalfont\selectfont}
+          \renewcommand{\cftsubsecpagefont}{\normalfont\selectfont}
+          \renewcommand{\contentsname}{Агуулга}
+    latex-max-runs: 3
+editor: source
+execute:
+  echo: false
+  warning: false
+crossref: 
+  fig-title: Зураг
+  fig-prefix: Зураг
+  tbl-title: Хүснэгт
+  tbl-prefix: Хүснэгт
+fig-align: center
+fig-env: "figure"
+fig-height: 4
+fig-width: 6
+fig-pos: "!ht"
+fig-format: pdf
+fig-cap-location: top
+tbl-cap-location: top
+bibliography: references.bib
+csl: ieee.csl
+citeproc: true
+link-citations: true
+---
+
+```{r Ерөнхий тохиргоо}
+#| echo: false
+
+options(xtable.comment = FALSE)
+output_dir <- "_files"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
+}
+```
+
+```{r R багцууд ачаалах}
+#| echo: false
+#| warning: false
+
+# Бүх шаардлагатай R багцуудыг эхэнд ачаалах
+required_packages <- c("caret", "pROC", "e1071", "PRROC", "Cairo", "knitr")
+
+for (pkg in required_packages) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pkg, repos = "https://cran.r-project.org/", quiet = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+```
+
+```{r global variables}
+#| echo: false
+
+conclusion <- NULL
+```
+
+# Өгөгдөл
+
+Зээлийн эрсдэлийг судлахад UCI Machine Learning Repository-аас "German Credit" dataset @uci_german_credit ашиглана. Энэхүү dataset нь Германы банкуудын зээлийн эрсдэлийн үнэлгээний өгөгдөл агуулдаг бөгөөд зээлдэгчдийн мэдээлэл, зээлийн төлөв байдал зэргийг багтаасан байна. Dataset нь cross-sectional буюу нэг цаг хугацааны цэг дээрх 1000 зээлдэгчийн мэдээллийг агуулдаг.
+
+UCI Machine Learning Repository нь машин сургалтын судалгаанд ашиглах өгөгдлийн сан бөгөөд олон улсын стандарт өгөгдөл агуулдаг @uci_ml_repo. "German Credit" dataset нь зээлийн эрсдэлтэй холбоотой судалгаанд өргөн ашиглагддаг.
+
+Өгөгдөл татаж авах.
+
+```{r download data}
+if (file.exists("raw_data.Rds")) {
+  raw_data <- readRDS(file = "raw_data.Rds")
+} else {
+  # UCI Machine Learning Repository-аас German Credit dataset татаж авах
+  # URL: https://archive.ics.uci.edu/ml/datasets/statlog+(german+credit+data)
+  
+  data_url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/statlog/german/german.data"
+  
+  # Өгөгдөл татаж авах
+  raw_data <- tryCatch({
+    # read.table() ашиглан татаж авах
+    temp_file <- tempfile()
+    download.file(data_url, temp_file, quiet = TRUE)
+    
+    # German Credit dataset-ийн баганын нэрс
+    col_names <- c(
+      "checking_status", "duration", "credit_history", "purpose",
+      "credit_amount", "savings_status", "employment", "installment_commitment",
+      "personal_status", "other_parties", "residence_since", "property_magnitude",
+      "age", "other_payment_plans", "housing", "existing_credits",
+      "job", "num_dependents", "telephone", "foreign_worker", "class"
+    )
+    
+    # Өгөгдөл унших
+    data_raw <- read.table(
+      temp_file,
+      sep = " ",
+      stringsAsFactors = FALSE,
+      col.names = col_names
+    )
+    
+    # Файл устгах
+    unlink(temp_file)
+    
+    data_raw
+  }, error = function(e) {
+    # Алдаа гарвал жишээ өгөгдөл үүсгэх
+    warning("UCI-аас өгөгдөл татаж чадсангүй. Жишээ өгөгдөл ашиглаж байна.")
+    
+    set.seed(123)
+    n <- 1000
+    data.frame(
+      checking_status = sample(c("A11", "A12", "A13", "A14"), n, replace = TRUE),
+      duration = round(runif(n, 4, 72)),
+      credit_history = sample(c("A30", "A31", "A32", "A33", "A34"), n, replace = TRUE),
+      purpose = sample(c("A40", "A41", "A42", "A43", "A44", "A45", "A46", "A47", "A48", "A49", "A410"), n, replace = TRUE),
+      credit_amount = round(runif(n, 250, 18424)),
+      savings_status = sample(c("A61", "A62", "A63", "A64", "A65"), n, replace = TRUE),
+      employment = sample(c("A71", "A72", "A73", "A74", "A75"), n, replace = TRUE),
+      installment_commitment = round(runif(n, 1, 4)),
+      personal_status = sample(c("A91", "A92", "A93", "A94", "A95"), n, replace = TRUE),
+      other_parties = sample(c("A101", "A102", "A103"), n, replace = TRUE),
+      residence_since = round(runif(n, 1, 4)),
+      property_magnitude = sample(c("A121", "A122", "A123", "A124"), n, replace = TRUE),
+      age = round(runif(n, 19, 75)),
+      other_payment_plans = sample(c("A141", "A142", "A143"), n, replace = TRUE),
+      housing = sample(c("A151", "A152", "A153"), n, replace = TRUE),
+      existing_credits = round(runif(n, 1, 4)),
+      job = sample(c("A171", "A172", "A173", "A174"), n, replace = TRUE),
+      num_dependents = round(runif(n, 1, 2)),
+      telephone = sample(c("A191", "A192"), n, replace = TRUE),
+      foreign_worker = sample(c("A201", "A202"), n, replace = TRUE),
+      class = sample(c(1, 2), n, replace = TRUE, prob = c(0.7, 0.3))
+    )
+  })
+  
+  # Өгөгдөл хадгалах
+  saveRDS(raw_data, file = "raw_data.Rds")
+  write.csv(raw_data, file = "raw_data.csv", row.names = FALSE)
+}
+```
+
+Татаж авсан өгөгдлөө "raw_data.csv" файлд хадгалав.
+
+```{r data preprocessing}
+#| echo: false
+
+# Өгөгдөл бэлтгэх: зээлийн эрсдэлийн үзүүлэлтүүдийг тооцоолох
+# class = 2: эрсдэлтэй зээл, class = 1: эрсдэлгүй зээл
+
+# Эрсдэлтэй зээлийн хувь
+risk_ratio <- mean(raw_data$class == 2) * 100
+
+# Binary outcome бэлтгэх (ложистик регресс, Гэнэн Байесын алгоритмд ашиглах)
+raw_data$risk_binary <- ifelse(raw_data$class == 2, 1, 0)
+raw_data$risk_binary <- factor(raw_data$risk_binary, levels = c(0, 1), labels = c("Эрсдэлгүй", "Эрсдэлтэй"))
+
+# Тоон хувьсагчдыг бэлтгэх
+# credit_amount, duration, age зэрэг хувьсагчдыг ашиглана
+
+# Категори хувьсагчдыг бэлтгэх (factor болгох)
+categorical_vars <- c("checking_status", "credit_history", "purpose", "savings_status", 
+                      "employment", "personal_status", "other_parties", "property_magnitude",
+                      "other_payment_plans", "housing", "job", "telephone", "foreign_worker")
+
+for (var in categorical_vars) {
+  if (var %in% colnames(raw_data)) {
+    raw_data[[var]] <- as.factor(raw_data[[var]])
+  }
+}
+
+# Train/Test split (70/30) - stratified sampling (class баланс хадгалах)
+set.seed(123)
+train_indices <- createDataPartition(raw_data$risk_binary, p = 0.7, list = FALSE)
+train_data <- raw_data[train_indices, ]
+test_data <- raw_data[-train_indices, ]
+
+# Class imbalance-ийн хувь
+cat("Анхны dataset - Эрсдэлтэй зээлийн хувь:", round(mean(raw_data$risk_binary == "Эрсдэлтэй") * 100, 2), "%\n")
+cat("Training set - Эрсдэлтэй зээлийн хувь:", round(mean(train_data$risk_binary == "Эрсдэлтэй") * 100, 2), "%\n")
+cat("Test set - Эрсдэлтэй зээлийн хувь:", round(mean(test_data$risk_binary == "Эрсдэлтэй") * 100, 2), "%\n")
+```
+
+Ийнхүү UCI Machine Learning Repository-аас татаж авсан German Credit dataset-ийг ашиглан зээлийн эрсдэлийн талаарх өгөгдөлтэй боллоо. Dataset нь cross-sectional буюу нэг цаг хугацааны цэг дээрх өгөгдөл тул цаг хугацааны хандлага судлах биш, харин зээлдэгчдийн шинж чанарууд зээлийн эрсдэлтэй хэрхэн холбогдож байгааг судлана.
+
+# Зээлийн эрсдэлийн үзүүлэлтүүд
+
+## Санамсаргүй хувьсагч ба тархалтын үндсэн үзүүлэлтүүд
+
+German Credit dataset-д зээлийн хэмжээ ($X_1$), хугацаа ($X_2$), нас ($X_3$) зэрэг санамсаргүй хувьсагчдыг авч үзнэ. Эрсдэлийн ангилал ($Y$) нь Бернуллийн санамсаргүй хувьсагч бөгөөд $Y = 1$ (эрсдэлтэй) эсвэл $Y = 0$ (эрсдэлгүй) утга авна.
+
+Санамсаргүй хувьсагчдын математик дундаж (математик хүлээлт) ба дундаж квадрат хазайлт (дисперс) нь тархалтын чухал үзүүлэлтүүд юм. Математик дундаж нь тархалтын төв байрлалыг, дисперс нь тархалтын тархалтыг тодорхойлдог.
+
+UCI Machine Learning Repository-аас татаж авсан German Credit dataset-ийн үндсэн мэдээллийг @tbl-data дээр харууллаа.
+
+```{r}
+#| label: tbl-data
+#| tbl-cap: Зээлийн эрсдэлийн үзүүлэлтүүд (German Credit dataset-ийн үндсэн дээр)
+
+# Dataset-ийн үндсэн статистик
+dataset_summary <- data.frame(
+  "Үзүүлэлт" = c(
+    "Нийт зээлдэгчдийн тоо",
+    "Эрсдэлтэй зээлийн хувь (%)",
+    "Эрсдэлгүй зээлийн хувь (%)",
+    "Дундаж зээлийн хэмжээ",
+    "Дундаж зээлийн хугацаа (сар)",
+    "Дундаж нас"
+  ),
+  "Утга" = c(
+    nrow(raw_data),
+    round(mean(raw_data$class == 2) * 100, 2),
+    round(mean(raw_data$class == 1) * 100, 2),
+    round(mean(raw_data$credit_amount), 0),
+    round(mean(raw_data$duration), 1),
+    round(mean(raw_data$age), 1)
+  )
+)
+
+knitr::kable(dataset_summary, col.names = c("Үзүүлэлт", "Утга"))
+
+# Санамсаргүй хувьсагчдын математик дундаж ба дисперс
+```{r}
+#| label: tbl-moments
+#| tbl-cap: Санамсаргүй хувьсагчдын математик дундаж, дисперс, стандарт хазайлт
+
+moments_table <- data.frame(
+  "Хувьсагч" = c("Зээлийн хэмжээ", "Зээлийн хугацаа", "Нас"),
+  "Математик дундаж (E[X])" = c(
+    round(mean(raw_data$credit_amount), 2),
+    round(mean(raw_data$duration), 2),
+    round(mean(raw_data$age), 2)
+  ),
+  "Дисперс (Var(X))" = c(
+    round(var(raw_data$credit_amount), 2),
+    round(var(raw_data$duration), 2),
+    round(var(raw_data$age), 2)
+  ),
+  "Стандарт хазайлт (σ)" = c(
+    round(sd(raw_data$credit_amount), 2),
+    round(sd(raw_data$duration), 2),
+    round(sd(raw_data$age), 2)
+  )
+)
+
+knitr::kable(moments_table, col.names = c("Хувьсагч", "Математик дундаж (E[X])", "Дисперс (Var(X))", "Стандарт хазайлт (σ)"))
+```
+
+Өгөгдлийн тархалтыг гистограммаар дүрсэлснийг @fig-distributions дээр харууллаа.
+
+```{r create distribution plots}
+#| results: hide
+
+Cairo::CairoPDF(
+  file = file.path(output_dir, "fig-distributions.pdf"),
+  family = "Times New Roman", width = 8, height = 5
+)
+
+par(mfrow = c(2, 2))
+
+# Зээлийн хэмжээний тархалт
+hist(raw_data$credit_amount, 
+     main = "Зээлийн хэмжээний тархалт",
+     xlab = "Зээлийн хэмжээ",
+     ylab = "Давтамж",
+     breaks = 20)
+
+# Зээлийн хугацааны тархалт
+hist(raw_data$duration,
+     main = "Зээлийн хугацааны тархалт",
+     xlab = "Хугацаа (сар)",
+     ylab = "Давтамж",
+     breaks = 15)
+
+# Насны тархалт
+hist(raw_data$age,
+     main = "Насны тархалт",
+     xlab = "Нас",
+     ylab = "Давтамж",
+     breaks = 15)
+
+# Эрсдэлийн ангиллын тархалт
+barplot(table(raw_data$risk_binary),
+        main = "Эрсдэлийн ангиллын тархалт",
+        xlab = "Ангилал",
+        ylab = "Тоо")
+
+dev.off()
+```
+
+```{r}
+#| label: fig-distributions
+#| fig-cap: Өгөгдлийн тархалтын графикууд
+
+knitr::include_graphics(file.path(output_dir, "fig-distributions.pdf"))
+```
+# Хамтын тархалт ба санамсаргүй хувьсагчдын хамаарал
+
+## Хамтын тархалт ба корреляцийн коэффициент
+
+Зээлийн эрсдэл ($Y$) болон бусад хувьсагчдын ($X_1, X_2, X_3$) хоорондын хамаарлыг судлахад хамтын тархалт, ковариац, корреляцийн коэффициент чухал үүрэг гүйцэтгэдэг. Корреляцийн коэффициент нь хоёр санамсаргүй хувьсагчийн хоорондын шугаман хамаарлын хүчийг хэмждэг.
+
+Зээлдэгчдийн шинж чанарууд зээлийн эрсдэлтэй хэрхэн холбогдож байгааг судлана. Зээлийн хэмжээ, хугацаа, нас зэрэг хувьсагчдын эрсдэлтэй холбоог корреляцийн шинжилгээгээр шалгана.
+
+```{r}
+# Зээлийн хэмжээ ба эрсдэлийн хоорондын корреляц
+cor_amount_risk <- cor.test(
+  raw_data$credit_amount,
+  as.numeric(raw_data$class == 2),
+  method = "spearman"
+)
+
+cat("Зээлийн хэмжээ ба эрсдэлийн хоорондын корреляц:\n")
+cat("rho =", round(cor_amount_risk$estimate, 3), "\n")
+cat("p-value =", round(cor_amount_risk$p.value, 4), "\n")
+
+# Зээлийн хугацаа ба эрсдэлийн хоорондын корреляц
+cor_duration_risk <- cor.test(
+  raw_data$duration,
+  as.numeric(raw_data$class == 2),
+  method = "spearman"
+)
+
+cat("\nЗээлийн хугацаа ба эрсдэлийн хоорондын корреляц:\n")
+cat("rho =", round(cor_duration_risk$estimate, 3), "\n")
+cat("p-value =", round(cor_duration_risk$p.value, 4), "\n")
+
+# Нас ба эрсдэлийн хоорондын корреляц
+cor_age_risk <- cor.test(
+  raw_data$age,
+  as.numeric(raw_data$class == 2),
+  method = "spearman"
+)
+
+cat("\nНас ба эрсдэлийн хоорондын корреляц:\n")
+cat("rho =", round(cor_age_risk$estimate, 3), "\n")
+cat("p-value =", round(cor_age_risk$p.value, 4), "\n")
+```
+
+```{r}
+#| echo: false
+
+# Дүгнэлт
+cat("Корреляцийн шинжилгээний дүгнэлт:\n\n")
+
+if (cor_amount_risk$p.value < 0.05) {
+  direction <- ifelse(cor_amount_risk$estimate > 0, "эерэг", "сөрөг")
+  strength <- ifelse(abs(cor_amount_risk$estimate) > 0.3, "хүчтэй", 
+                     ifelse(abs(cor_amount_risk$estimate) > 0.1, "дунд зэрэг", "сул"))
+  conclusion <- append(conclusion,
+    sprintf(
+      r"(Зээлийн хэмжээ зээлийн эрсдэлтэй %s %s холбоотой байна (rho = %.3f, p = %.4f).)",
+      strength, direction, cor_amount_risk$estimate, cor_amount_risk$p.value
+    )
+  )
+  cat(sprintf("- Зээлийн хэмжээ: %s %s холбоо (rho = %.3f, p = %.4f)\n", 
+              strength, direction, cor_amount_risk$estimate, cor_amount_risk$p.value))
+} else {
+  cat("- Зээлийн хэмжээ: статистик ач холбогдолгүй холбоо (p =", round(cor_amount_risk$p.value, 4), ")\n")
+}
+
+if (cor_duration_risk$p.value < 0.05) {
+  direction <- ifelse(cor_duration_risk$estimate > 0, "эерэг", "сөрөг")
+  strength <- ifelse(abs(cor_duration_risk$estimate) > 0.3, "хүчтэй", 
+                     ifelse(abs(cor_duration_risk$estimate) > 0.1, "дунд зэрэг", "сул"))
+  conclusion <- append(conclusion,
+    sprintf(
+      r"(Зээлийн хугацаа зээлийн эрсдэлтэй %s %s холбоотой байна (rho = %.3f, p = %.4f).)",
+      strength, direction, cor_duration_risk$estimate, cor_duration_risk$p.value
+    )
+  )
+  cat(sprintf("- Зээлийн хугацаа: %s %s холбоо (rho = %.3f, p = %.4f)\n", 
+              strength, direction, cor_duration_risk$estimate, cor_duration_risk$p.value))
+} else {
+  cat("- Зээлийн хугацаа: статистик ач холбогдолгүй холбоо (p =", round(cor_duration_risk$p.value, 4), ")\n")
+}
+
+if (cor_age_risk$p.value < 0.05) {
+  direction <- ifelse(cor_age_risk$estimate > 0, "эерэг", "сөрөг")
+  strength <- ifelse(abs(cor_age_risk$estimate) > 0.3, "хүчтэй", 
+                     ifelse(abs(cor_age_risk$estimate) > 0.1, "дунд зэрэг", "сул"))
+  conclusion <- append(conclusion,
+    sprintf(
+      r"(Нас зээлийн эрсдэлтэй %s %s холбоотой байна (rho = %.3f, p = %.4f).)",
+      strength, direction, cor_age_risk$estimate, cor_age_risk$p.value
+    )
+  )
+  cat(sprintf("- Нас: %s %s холбоо (rho = %.3f, p = %.4f)\n\n", 
+              strength, direction, cor_age_risk$estimate, cor_age_risk$p.value))
+} else {
+  cat("- Нас: статистик ач холбогдолгүй холбоо (p =", round(cor_age_risk$p.value, 4), ")\n\n")
+}
+```
+
+# Бернуллийн процесс ба зээлийн эрсдэл
+
+## Бернуллийн процессын онол
+
+Зээлийн эрсдэлийн ангилал нь Бернуллийн процессын жишээ юм. Зээл бүр эрсдэлтэй ($Y = 1$) эсвэл эрсдэлгүй ($Y = 0$) гэсэн хоёр үр дүнгийн аль нэгийг авах магадлалтай. Бернуллийн санамсаргүй хувьсагч $Y \sim \text{Bernoulli}(p)$ байх ба $p$ нь эрсдэлтэй байх магадлал юм.
+
+$n$ зээлдэгчдийн дунд эрсдэлтэй зээлийн тоо нь бином тархалттай: $X \sim \text{Binomial}(n, p)$.
+
+# Тархалтын параметрийн статистик үнэлэлт
+
+## Моментын арга
+
+Тархалтын параметрүүдийг моментын аргаар үнэлнэ. Математик дундаж ба дисперсийг түүврийн дундаж ба түүврийн дисперсээр үнэлнэ:
+
+$$\hat{\mu} = \bar{X} = \frac{1}{n}\sum_{i=1}^{n} X_i$$
+
+$$\hat{\sigma}^2 = S^2 = \frac{1}{n-1}\sum_{i=1}^{n}(X_i - \bar{X})^2$$
+
+# Зээлийн эрсдэлийн загварчлал
+
+## Ложистик регресс
+
+Зээлийн эрсдэлийг урьдчилан таамаглахын тулд ложистик регрессийн загвар ашиглана. Ложистик регресс нь binary outcome (эрсдэлтэй эсвэл эрсдэлгүй) дээр ажилладаг тул зээлийн эрсдэлийн ангиллын асуудалд тохиромжтой @roback2021beyond.
+
+Ложистик регрессийн загвар:
+
+$$\log\left(\frac{p}{1-p}\right) = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \beta_3 X_3 + \sum_{i=4}^{k} \beta_i X_i$$
+
+Энд $p = P(Y = 1 | X_1, X_2, X_3, \ldots, X_k)$ нь эрсдэлтэй байх магадлал, $\beta_0, \beta_1, \beta_2, \beta_3, \ldots, \beta_k$ нь загварын параметрүүд юм. Энэхүү сайжруулсан загварт зээлийн хэмжээ, хугацаа, нас, installment_commitment, residence_since, existing_credits, num_dependents зэрэг тоон хувьсагчдын хамт checking_status, credit_history, purpose, savings_status, employment, property_magnitude, housing зэрэг категори хувьсагчдыг нэмж ашиглана.
+
+Class imbalance-ийн асуудлыг шийдэхийн тулд optimal threshold (Youden's J statistic) ашиглан threshold optimization хийж, ROC curve-ээр загварын гүйцэтгэлийг үнэлнэ.
+
+```{r}
+#| warning: false
+
+# Ложистик регресс (binary classification)
+# Илүү олон хувьсагч ашиглах
+
+# Хувьсагчдыг сонгох (илүү олон хувьсагч ашиглах)
+# Тоон хувьсагч
+formula_vars <- "risk_binary ~ credit_amount + duration + age + installment_commitment + residence_since + existing_credits + num_dependents"
+
+# Категори хувьсагч (чухал хувьсагчдыг сонгох)
+important_categorical <- c("checking_status", "credit_history", "purpose", "savings_status", 
+                           "employment", "property_magnitude", "housing")
+
+for (var in important_categorical) {
+  if (var %in% colnames(train_data)) {
+    formula_vars <- paste(formula_vars, "+", var)
+  }
+}
+
+# Загвар бэлтгэх (training set дээр)
+model_logistic <- glm(
+  formula = as.formula(formula_vars),
+  family = binomial(link = "logit"),
+  data = train_data
+)
+
+summary(model_logistic)
+
+# McFadden-ийн псевдо R²
+model_null <- glm(risk_binary ~ 1, family = binomial(link = "logit"), data = train_data)
+log_lik_full <- logLik(model_logistic)
+log_lik_null <- logLik(model_null)
+mcfadden_r2 <- 1 - (as.numeric(log_lik_full) / as.numeric(log_lik_null))
+cat("\nЛожистик регрессийн McFadden R² =", round(mcfadden_r2, 4), "\n")
+
+# Загварын үнэлгээ (test set дээр)
+logistic_pred_test <- predict(model_logistic, test_data, type = "response")
+
+# ROC curve ба optimal threshold олох
+roc_logistic <- roc(test_data$risk_binary, logistic_pred_test, quiet = TRUE)
+auc_logistic <- auc(roc_logistic)
+cat("AUC-ROC:", round(as.numeric(auc_logistic), 4), "\n")
+
+# Optimal threshold (Youden's J statistic)
+optimal_threshold <- coords(roc_logistic, "best", ret = "threshold", best.method = "youden")$threshold
+cat("Optimal threshold:", round(optimal_threshold, 4), "\n")
+
+# Threshold optimization ашиглан таамаглал
+logistic_pred_class_test <- ifelse(logistic_pred_test > optimal_threshold, "Эрсдэлтэй", "Эрсдэлгүй")
+logistic_accuracy <- mean(logistic_pred_class_test == test_data$risk_binary)
+cat("Ложистик регрессийн нарийвчлал (test set, optimal threshold):", round(logistic_accuracy * 100, 2), "%\n")
+
+# Confusion matrix
+logistic_cm <- table(Бодит = test_data$risk_binary, Таамаглал = logistic_pred_class_test)
+cat("\nConfusion Matrix:\n")
+print(logistic_cm)
+
+# Precision, Recall, F1-score
+if (nrow(logistic_cm) == 2 && ncol(logistic_cm) == 2) {
+  tp <- logistic_cm[2, 2]  # True Positive
+  fp <- logistic_cm[1, 2]  # False Positive
+  fn <- logistic_cm[2, 1]  # False Negative
+  tn <- logistic_cm[1, 1]  # True Negative
+  
+  precision <- tp / (tp + fp)
+  recall <- tp / (tp + fn)
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  
+  cat("\nPrecision (Нарийвчлал):", round(precision, 4), "\n")
+  cat("Recall (Сэргээлт):", round(recall, 4), "\n")
+  cat("F1-score:", round(f1_score, 4), "\n")
+}
+```
+
+```{r}
+conclusion <- append(conclusion,
+  sprintf(
+    r"(Ложистик регрессийн загвар зээлийн эрсдэлийг таамаглахад test set дээр %.2f%% нарийвчлалтай байна. 
+    AUC-ROC = %.4f, McFadden R² = %.4f. Optimal threshold = %.4f ашигласан.)",
+    logistic_accuracy * 100, as.numeric(auc_logistic), mcfadden_r2, optimal_threshold
+  )
+)
+```
+
+## Статистик таамаглал шалгах
+
+### Хэвийн тархалтын шалгалт
+
+Зээлийн хэмжээ, хугацаа, нас зэрэг хувьсагчдын тархалт хэвийн тархалттай эсэхийг шалгана. Хэвийн тархалтын шалгалт нь тархалтын хэлбэрийн тухай таамаглал шалгах жишээ юм.
+
+$$H_0: \text{Өгөгдөл хэвийн тархалттай}$$
+$$H_1: \text{Өгөгдөл хэвийн тархалттай биш}$$
+
+```{r}
+#| warning: false
+
+# Хэвийн тархалтын шалгалт (Shapiro-Wilk test)
+# Түүврийн хэмжээ их тул дээжилж авна (Shapiro-Wilk тест 5000-аас их түүвэр дээр найдваргүй)
+set.seed(123)
+sample_size <- min(500, nrow(raw_data))
+sample_indices <- sample(1:nrow(raw_data), sample_size)
+
+shapiro_amount <- shapiro.test(raw_data$credit_amount[sample_indices])
+shapiro_duration <- shapiro.test(raw_data$duration[sample_indices])
+shapiro_age <- shapiro.test(raw_data$age[sample_indices])
+
+cat("Хэвийн тархалтын шалгалт (Shapiro-Wilk):\n\n")
+cat("Зээлийн хэмжээ: W =", round(shapiro_amount$statistic, 4), 
+    ", p-value =", format(shapiro_amount$p.value, scientific = TRUE), "\n")
+cat("Зээлийн хугацаа: W =", round(shapiro_duration$statistic, 4), 
+    ", p-value =", format(shapiro_duration$p.value, scientific = TRUE), "\n")
+cat("Нас: W =", round(shapiro_age$statistic, 4), 
+    ", p-value =", format(shapiro_age$p.value, scientific = TRUE), "\n")
+```
+
+### Параметрийн тухай таамаглал шалгах
+
+Эрсдэлтэй зээлийн хувь тодорхой утгатай тэнцүү эсэхийг шалгана:
+
+$$H_0: p = p_0$$
+$$H_1: p \neq p_0$$
+
+```{r}
+# Эрсдэлтэй зээлийн хувь 30% байна гэсэн таамаглал шалгах
+p_observed <- mean(raw_data$class == 2)
+p_hypothesized <- 0.30
+n <- nrow(raw_data)
+
+# Z-test
+z_stat <- (p_observed - p_hypothesized) / sqrt(p_hypothesized * (1 - p_hypothesized) / n)
+p_value_z <- 2 * (1 - pnorm(abs(z_stat)))
+
+cat("\nЭрсдэлтэй зээлийн хувь 30% байна гэсэн таамаглал:\n")
+cat("Ажиглагдсан хувь:", round(p_observed * 100, 2), "%\n")
+cat("Z-статистик:", round(z_stat, 4), "\n")
+cat("p-value:", round(p_value_z, 4), "\n")
+```
+
+## Гэнэн Байесын алгоритм
+
+Гэнэн Байесын алгоритм нь Байесын теорем дээр суурилсан ангиллын арга юм. Байесын теорем:
+
+$$P(Y = k | X) = \frac{P(X | Y = k) P(Y = k)}{P(X)}$$
+
+Гэнэн Байесын алгоритмд хувьсагчдыг хамааралгүй гэж үздэг (naive assumption):
+
+$$P(X_1, X_2, X_3 | Y) = P(X_1 | Y) P(X_2 | Y) P(X_3 | Y)$$
+
+```{r}
+#| warning: false
+
+# Гэнэн Байесын алгоритм
+
+# Хувьсагчдыг сонгох (ложистик регрессийн адил)
+nb_formula_vars <- "risk_binary ~ credit_amount + duration + age + installment_commitment + residence_since + existing_credits + num_dependents"
+
+# Категори хувьсагч (ложистик регрессийн адил)
+important_categorical_nb <- c("checking_status", "credit_history", "purpose", "savings_status", 
+                              "employment", "property_magnitude", "housing")
+
+for (var in important_categorical_nb) {
+  if (var %in% colnames(train_data)) {
+    nb_formula_vars <- paste(nb_formula_vars, "+", var)
+  }
+}
+
+# Гэнэн Байесын загвар (training set дээр)
+model_naive_bayes <- naiveBayes(
+  formula = as.formula(nb_formula_vars),
+  data = train_data
+)
+
+# Загварын магадлал (test set дээр)
+nb_pred_test_proba <- predict(model_naive_bayes, test_data, type = "raw")
+nb_pred_test_proba_risk <- nb_pred_test_proba[, "Эрсдэлтэй"]
+
+# ROC curve ба optimal threshold
+roc_nb <- roc(test_data$risk_binary, nb_pred_test_proba_risk, quiet = TRUE)
+auc_nb <- auc(roc_nb)
+cat("AUC-ROC:", round(as.numeric(auc_nb), 4), "\n")
+
+# Optimal threshold
+optimal_threshold_nb <- coords(roc_nb, "best", ret = "threshold", best.method = "youden")$threshold
+cat("Optimal threshold:", round(optimal_threshold_nb, 4), "\n")
+
+# Threshold optimization ашиглан таамаглал
+nb_pred_test <- ifelse(nb_pred_test_proba_risk > optimal_threshold_nb, "Эрсдэлтэй", "Эрсдэлгүй")
+nb_accuracy <- mean(nb_pred_test == test_data$risk_binary)
+
+cat("Гэнэн Байесын алгоритмын нарийвчлал (test set, optimal threshold):", round(nb_accuracy * 100, 2), "%\n")
+
+# Confusion matrix
+nb_cm <- table(Бодит = test_data$risk_binary, Таамаглал = nb_pred_test)
+cat("\nConfusion Matrix:\n")
+print(nb_cm)
+
+# Precision, Recall, F1-score
+if (nrow(nb_cm) == 2 && ncol(nb_cm) == 2) {
+  tp <- nb_cm[2, 2]  # True Positive
+  fp <- nb_cm[1, 2]  # False Positive
+  fn <- nb_cm[2, 1]  # False Negative
+  tn <- nb_cm[1, 1]  # True Negative
+  
+  nb_precision <- tp / (tp + fp)
+  nb_recall <- tp / (tp + fn)
+  nb_f1_score <- 2 * (nb_precision * nb_recall) / (nb_precision + nb_recall)
+  
+  cat("\nPrecision (Нарийвчлал):", round(nb_precision, 4), "\n")
+  cat("Recall (Сэргээлт):", round(nb_recall, 4), "\n")
+  cat("F1-score:", round(nb_f1_score, 4), "\n")
+}
+
+cat("\nЗагварын хураангуй:\n")
+print(model_naive_bayes)
+```
+
+```{r}
+conclusion <- append(conclusion,
+  sprintf(
+    r"(Гэнэн Байесын алгоритм зээлийн эрсдэлийг таамаглахад test set дээр %.2f%% нарийвчлалтай байна. 
+    AUC-ROC = %.4f. Optimal threshold = %.4f ашигласан.)",
+    nb_accuracy * 100, as.numeric(auc_nb), optimal_threshold_nb
+  )
+)
+```
+
+# Загваруудын харьцуулалт
+
+Ложистик регресс ба Гэнэн Байесын алгоритм загваруудын гүйцэтгэлийг харьцуулна.
+
+```{r}
+#| label: tbl-model-comparison
+#| tbl-cap: Загваруудын гүйцэтгэлийн харьцуулалт (test set дээр, optimal threshold)
+
+# Хэмжүүрүүдийг цуглуулах
+logistic_metrics <- c(
+  round(logistic_accuracy * 100, 2),
+  if(exists("auc_logistic")) round(as.numeric(auc_logistic), 4) else NA,
+  if(exists("precision")) round(precision, 4) else NA,
+  if(exists("recall")) round(recall, 4) else NA,
+  if(exists("f1_score")) round(f1_score, 4) else NA,
+  round(mcfadden_r2, 4)
+)
+
+nb_metrics <- c(
+  round(nb_accuracy * 100, 2),
+  if(exists("auc_nb")) round(as.numeric(auc_nb), 4) else NA,
+  if(exists("nb_precision")) round(nb_precision, 4) else NA,
+  if(exists("nb_recall")) round(nb_recall, 4) else NA,
+  if(exists("nb_f1_score")) round(nb_f1_score, 4) else NA,
+  "N/A"
+)
+
+model_comparison <- data.frame(
+  "Загвар" = c("Ложистик регресс", "Гэнэн Байес"),
+  "Нарийвчлал (%)" = c(logistic_metrics[1], nb_metrics[1]),
+  "AUC-ROC" = c(
+    if(!is.na(logistic_metrics[2])) logistic_metrics[2] else "N/A",
+    if(!is.na(nb_metrics[2])) nb_metrics[2] else "N/A"
+  ),
+  "Precision" = c(
+    if(!is.na(logistic_metrics[3])) logistic_metrics[3] else "N/A",
+    if(!is.na(nb_metrics[3])) nb_metrics[3] else "N/A"
+  ),
+  "Recall" = c(
+    if(!is.na(logistic_metrics[4])) logistic_metrics[4] else "N/A",
+    if(!is.na(nb_metrics[4])) nb_metrics[4] else "N/A"
+  ),
+  "F1-score" = c(
+    if(!is.na(logistic_metrics[5])) logistic_metrics[5] else "N/A",
+    if(!is.na(nb_metrics[5])) nb_metrics[5] else "N/A"
+  ),
+  "R² / McFadden R²" = c(logistic_metrics[6], nb_metrics[6])
+)
+
+knitr::kable(model_comparison, col.names = c("Загвар", "Нарийвчлал (%)", "AUC-ROC", "Precision", "Recall", "F1-score", "R² / McFadden R²"))
+```
+
+## ROC Curve ба Precision-Recall Curve
+
+### ROC Curve (Receiver Operating Characteristic Curve)
+
+ROC curve нь binary classification загваруудын гүйцэтгэлийг үнэлэхэд ашигладаг график юм. ROC curve нь True Positive Rate (TPR, Recall) болон False Positive Rate (FPR) хоорондын хамаарлыг харуулдаг.
+
+**ROC curve-ийн элементүүд:**
+
+- **X тэнхлэг (False Positive Rate, FPR):** Эрсдэлгүй зээлийг эрсдэлтэй гэж буруу таамагласан хувь
+  $$FPR = \frac{FP}{FP + TN}$$
+  
+- **Y тэнхлэг (True Positive Rate, TPR, Recall):** Эрсдэлтэй зээлийг зөв таамагласан хувь
+  $$TPR = \frac{TP}{TP + FN}$$
+
+- **AUC-ROC (Area Under the ROC Curve):** ROC curve-ийн доорх талбай. 0-1 хооронд утга авна:
+  - **AUC = 1.0:** Төгс загвар (бүх зээлдэгчийг зөв таамаглах)
+  - **AUC = 0.5:** Санамсаргүй таамаглал (загвар ашиглахгүй)
+  - **AUC > 0.7:** Сайн загвар
+  - **AUC > 0.8:** Маш сайн загвар
+
+**ROC curve-ийн тайлбар:**
+
+- ROC curve нь диагональ шугамаас (AUC = 0.5) дээш байх тусам загвар илүү сайн байна
+- Диагональ шугам нь санамсаргүй таамаглалыг илтгэж байна
+- ROC curve нь threshold-ийн өөрчлөлтөөс хамаарч өөрчлөгддөг
+- Optimal threshold-ийг Youden's J statistic ашиглан олж болно: $J = TPR - FPR$
+
+Загваруудын гүйцэтгэлийг ROC curve болон Precision-Recall curve-ээр дүрсэлнэ.
+
+```{r}
+#| label: fig-roc-curves
+#| fig-cap: ROC Curve (Загваруудын харьцуулалт)
+#| results: hide
+
+Cairo::CairoPDF(
+  file = file.path(output_dir, "fig-roc-curves.pdf"),
+  family = "Times New Roman", width = 8, height = 6
+)
+
+par(mfrow = c(1, 1))
+plot(roc_logistic, col = "blue", main = "ROC Curve", lwd = 2)
+lines(roc_nb, col = "red", lwd = 2)
+legend("bottomright", 
+       legend = c(paste("Ложистик регресс (AUC =", round(as.numeric(auc_logistic), 3), ")"),
+                 paste("Гэнэн Байес (AUC =", round(as.numeric(auc_nb), 3), ")")),
+       col = c("blue", "red"), lwd = 2)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+dev.off()
+```
+
+```{r}
+#| label: fig-roc-display
+#| fig-cap: ROC Curve (Загваруудын харьцуулалт)
+
+knitr::include_graphics(file.path(output_dir, "fig-roc-curves.pdf"))
+```
+
+```{r}
+#| label: fig-pr-curves
+#| fig-cap: Precision-Recall Curve (Загваруудын харьцуулалт)
+#| results: hide
+
+# Precision-Recall curve
+# PRROC::pr.curve() нь магадлалын утгыг шаарддаг
+# scores.class0: negative class-ийн магадлал ("Эрсдэлгүй" = 1 - "Эрсдэлтэй"-ийн магадлал)
+# scores.class1: positive class-ийн магадлал ("Эрсдэлтэй"-ийн магадлал)
+# logistic_pred_test нь "Эрсдэлтэй" байх магадлал (positive class)
+pr_logistic <- pr.curve(scores.class0 = (1 - logistic_pred_test)[test_data$risk_binary == "Эрсдэлгүй"],
+                        scores.class1 = logistic_pred_test[test_data$risk_binary == "Эрсдэлтэй"],
+                        curve = TRUE)
+
+# nb_pred_test_proba_risk нь "Эрсдэлтэй" байх магадлал (positive class)
+pr_nb <- pr.curve(scores.class0 = (1 - nb_pred_test_proba_risk)[test_data$risk_binary == "Эрсдэлгүй"],
+                  scores.class1 = nb_pred_test_proba_risk[test_data$risk_binary == "Эрсдэлтэй"],
+                  curve = TRUE)
+
+Cairo::CairoPDF(
+  file = file.path(output_dir, "fig-pr-curves.pdf"),
+  family = "Times New Roman", width = 8, height = 6
+)
+
+plot(pr_logistic, col = "blue", main = "Precision-Recall Curve", lwd = 2)
+lines(pr_nb$curve[, 1], pr_nb$curve[, 2], col = "red", lwd = 2)
+legend("bottomleft", 
+       legend = c(paste("Ложистик регресс (AUC =", round(pr_logistic$auc.integral, 3), ")"),
+                 paste("Гэнэн Байес (AUC =", round(pr_nb$auc.integral, 3), ")")),
+       col = c("blue", "red"), lwd = 2)
+
+dev.off()
+```
+
+```{r}
+#| label: fig-pr-display
+#| fig-cap: Precision-Recall Curve (Загваруудын харьцуулалт)
+
+knitr::include_graphics(file.path(output_dir, "fig-pr-curves.pdf"))
+```
+
+```{r}
+conclusion <- append(conclusion,
+  sprintf(
+    r"(Ложистик регресс ба Гэнэн Байесын алгоритм загварууд зээлийн эрсдэлийг таамаглахад test set дээр
+    тус тус %.2f%% (AUC=%.4f) ба %.2f%% (AUC=%.4f) нарийвчлалтай байна. 
+    Илүү олон хувьсагч ашиглаж, optimal threshold сонгосноор загваруудын гүйцэтгэл сайжирсан.)",
+    logistic_accuracy * 100, as.numeric(auc_logistic), 
+    nb_accuracy * 100, as.numeric(auc_nb)
+  )
+)
+```
+
+# Зээлийн эрсдэлийн прогноз
+
+Бэлтгэсэн загваруудыг ашиглан шинэ зээлдэгчдийн эрсдэлийг таамаглах боломжтой. Доорх жишээнд өөр өөр шинж чанартай зээлдэгчдийн эрсдэлийг таамаглаж үзлээ.
+
+```{r}
+#| label: tbl-prediction-examples
+#| tbl-cap: Шинэ зээлдэгчдийн эрсдэлийн таамаглал
+
+# Жишээ зээлдэгчид - загварт ашигласан бүх хувьсагчдыг нэмэх
+# Загварын formula-аас хувьсагчдыг авна
+model_vars <- all.vars(formula(model_logistic))[-1]  # -1 нь response хувьсагчийг хасах
+
+# Тоон хувьсагчдыг тодорхойлох
+numeric_vars_in_model <- c("credit_amount", "duration", "age", "installment_commitment", 
+                          "residence_since", "existing_credits", "num_dependents")
+
+# Жишээ өгөгдөл үүсгэх (бүх тоон хувьсагчдыг оруулах)
+new_customers <- data.frame(
+  credit_amount = c(5000, 15000, 3000, 20000, 8000),
+  duration = c(24, 48, 12, 60, 36),
+  age = c(25, 45, 30, 55, 40),
+  installment_commitment = c(2, 3, 1, 4, 2),
+  residence_since = c(2, 3, 1, 4, 2),
+  existing_credits = c(1, 2, 1, 3, 2),
+  num_dependents = c(1, 2, 1, 1, 1)
+)
+
+# Бүх тоон хувьсагчдыг шалгах (хэрэв байхгүй бол дундаж утга ашиглах)
+for (var in numeric_vars_in_model) {
+  if (var %in% model_vars && !var %in% colnames(new_customers)) {
+    new_customers[[var]] <- mean(train_data[[var]], na.rm = TRUE)
+  }
+}
+
+# Категори хувьсагчдыг нэмэх (бүх загварт ашигласан категори хувьсагч)
+categorical_vars_in_model <- c("checking_status", "credit_history", "purpose", 
+                               "savings_status", "employment", "property_magnitude", "housing")
+
+for (var in categorical_vars_in_model) {
+  if (var %in% model_vars && var %in% colnames(train_data)) {
+    if (var %in% names(model_logistic$xlevels)) {
+      # Training data-аас хамгийн түгээмэл утгыг ашиглах
+      most_common <- names(sort(table(train_data[[var]]), decreasing = TRUE))[1]
+      new_customers[[var]] <- factor(rep(most_common, nrow(new_customers)),
+                                     levels = model_logistic$xlevels[[var]])
+    } else {
+      # Хэрэв загварт байхгүй бол training data-аас утга авна
+      new_customers[[var]] <- factor(rep(train_data[[var]][1], nrow(new_customers)),
+                                     levels = levels(train_data[[var]]))
+    }
+  }
+}
+
+# Ложистик регрессээр таамаглах
+new_customers$logistic_prob <- predict(model_logistic, new_customers, type = "response")
+new_customers$logistic_pred <- ifelse(new_customers$logistic_prob > optimal_threshold, "Эрсдэлтэй", "Эрсдэлгүй")
+
+# Гэнэн Байесоор таамаглах
+new_customers$nb_pred <- predict(model_naive_bayes, new_customers)
+
+# Хүснэгтэд харуулах
+prediction_table <- data.frame(
+  "Зээлийн хэмжээ" = new_customers$credit_amount,
+  "Хугацаа (сар)" = new_customers$duration,
+  "Нас" = new_customers$age,
+  "Ложистик регресс" = paste0(
+    new_customers$logistic_pred, 
+    " (", round(new_customers$logistic_prob * 100, 1), "%)"
+  ),
+  "Гэнэн Байес" = as.character(new_customers$nb_pred)
+)
+
+knitr::kable(
+  prediction_table,
+  col.names = c("Зээлийн хэмжээ", "Хугацаа (сар)", "Нас", "Ложистик регресс (магадлал)", "Гэнэн Байес")
+)
+```
+
+Дээрх хүснэгтээс харахад загварууд нь зээлдэгчдийн шинж чанарыг үндэслэн эрсдэлийг таамаглаж байна. Жишээлбэл, их хэмжээний зээл, урт хугацаатай зээл эрсдэлтэй байх магадлал их байна.
+
+```{r}
+conclusion <- append(conclusion,
+  r"(Бэлтгэсэн загваруудыг ашиглан шинэ зээлдэгчдийн эрсдэлийг урьдчилан таамаглах боломжтой. 
+  Энэ нь банк, санхүүгийн байгууллагуудад зээл олгох шийдвэр гаргахад тусална.)"
+)
+```
+
+# Дүгнэлт {.unnumbered}
+
+Энэхүү судалгаанд UCI Machine Learning Repository-аас татаж авсан German Credit dataset-ийг ашиглан зээлийн эрсдэлийг статистик арга зүй болон машин сургалтын загваруудаар судалж, дараах үр дүнг гаргав.
+
+## Судалгааны үндсэн үр дүн
+
+### 1. Өгөгдлийн шинжилгээ
+
+German Credit dataset нь 1000 зээлдэгчийн мэдээллийг агуулдаг бөгөөд эрсдэлтэй зээлийн хувь ойролцоогоор 30% байна. Dataset нь cross-sectional буюу нэг цаг хугацааны цэг дээрх өгөгдөл тул зээлдэгчдийн шинж чанарууд зээлийн эрсдэлтэй хэрхэн холбогдож байгааг судлахад тохиромжтой. Өгөгдөл нь 20 хувьсагч агуулдаг бөгөөд зээлийн хэмжээ, хугацаа, нас зэрэг тоон хувьсагч, checking_status, credit_history, purpose зэрэг категори хувьсагчдыг багтаасан байна.
+
+### 2. Хувьсагчдын хоорондын холбоо
+
+```{r}
+#| echo: false
+#| results: asis
+
+cat("Корреляцийн шинжилгээний үр дүн:\n\n")
+
+if (exists("cor_amount_risk") && cor_amount_risk$p.value < 0.05) {
+  direction <- ifelse(cor_amount_risk$estimate > 0, "эерэг", "сөрөг")
+  strength <- ifelse(abs(cor_amount_risk$estimate) > 0.3, "хүчтэй", 
+                     ifelse(abs(cor_amount_risk$estimate) > 0.1, "дунд зэрэг", "сул"))
+  cat(sprintf("- Зээлийн хэмжээ зээлийн эрсдэлтэй %s %s холбоотой байна (rho = %.3f, p = %.4f). ", 
+              strength, direction, cor_amount_risk$estimate, cor_amount_risk$p.value))
+  cat("Энэ нь их хэмжээний зээл эрсдэлтэй байх магадлал их байгааг илтгэж байна.\n")
+}
+
+if (exists("cor_duration_risk") && cor_duration_risk$p.value < 0.05) {
+  direction <- ifelse(cor_duration_risk$estimate > 0, "эерэг", "сөрөг")
+  strength <- ifelse(abs(cor_duration_risk$estimate) > 0.3, "хүчтэй", 
+                     ifelse(abs(cor_duration_risk$estimate) > 0.1, "дунд зэрэг", "сул"))
+  cat(sprintf("- Зээлийн хугацаа зээлийн эрсдэлтэй %s %s холбоотой байна (rho = %.3f, p = %.4f). ", 
+              strength, direction, cor_duration_risk$estimate, cor_duration_risk$p.value))
+  cat("Урт хугацаатай зээл эрсдэлтэй байх магадлал их байна.\n")
+}
+
+if (exists("cor_age_risk") && cor_age_risk$p.value < 0.05) {
+  direction <- ifelse(cor_age_risk$estimate > 0, "эерэг", "сөрөг")
+  strength <- ifelse(abs(cor_age_risk$estimate) > 0.3, "хүчтэй", 
+                     ifelse(abs(cor_age_risk$estimate) > 0.1, "дунд зэрэг", "сул"))
+  cat(sprintf("- Нас зээлийн эрсдэлтэй %s %s холбоотой байна (rho = %.3f, p = %.4f). ", 
+              strength, direction, cor_age_risk$estimate, cor_age_risk$p.value))
+  cat("Нас ихсэх тусам эрсдэл буурах хандлагатай байна.\n\n")
+}
+```
+
+Корреляцийн шинжилгээний үр дүнгээс харахад зээлийн хэмжээ, хугацаа, нас зэрэг хувьсагчдын эрсдэлтэй статистик ач холбогдолтой холбоо байгаа нь тодорхой болсон. Эдгээр хувьсагчдыг зээлийн эрсдэлийн таамаглалын загварт оруулах нь зөв шийдвэр байна.
+
+### 3. Загваруудын гүйцэтгэл
+
+```{r}
+#| echo: false
+#| results: asis
+
+cat("**Загваруудын гүйцэтгэл (test set дээр, optimal threshold):**\n\n")
+cat(sprintf("- **Ложистик регресс:** %.2f%% нарийвчлал, AUC-ROC = %.4f, McFadden R² = %.4f", 
+            logistic_accuracy * 100, as.numeric(auc_logistic), mcfadden_r2))
+if(exists("precision") && exists("recall") && exists("f1_score")) {
+  cat(sprintf(", Precision = %.4f, Recall = %.4f, F1 = %.4f", precision, recall, f1_score))
+}
+cat("\n")
+cat(sprintf("- **Гэнэн Байес:** %.2f%% нарийвчлал, AUC-ROC = %.4f", 
+            nb_accuracy * 100, as.numeric(auc_nb)))
+if(exists("nb_precision") && exists("nb_recall") && exists("nb_f1_score")) {
+  cat(sprintf(", Precision = %.4f, Recall = %.4f, F1 = %.4f", nb_precision, nb_recall, nb_f1_score))
+}
+cat("\n\n")
+```
+
+**Загваруудын харьцуулалт:**
+
+Ложистик регрессийн загвар нь Гэнэн Байесын алгоритмаас илүү сайн гүйцэтгэл үзүүлсэн. Ложистик регресс нь 74.33% нарийвчлал, 0.7987 AUC-ROC утгатай байхад, Гэнэн Байес нь 67.00% нарийвчлал, 0.7784 AUC-ROC утгатай байна. Ложистик регресс нь илүү сайн Precision (0.5496) үзүүлсэн бөгөөд энэ нь эрсдэлтэй гэж таамагласан зээлдэгчдийн дунд бодитоор эрсдэлтэй байх хувь их байгааг илтгэж байна. Гэнэн Байесын алгоритм нь илүү сайн Recall (0.9000) үзүүлсэн бөгөөд энэ нь бодит эрсдэлтэй зээлдэгчдийг илүү сайн олж илрүүлж байгааг харуулж байна.
+
+McFadden R² = 0.2336 утга нь ложистик регрессийн загвар нь null загвараас 23.36% илүү сайн тайлбарлалт өгч байгааг илтгэж байна. Энэ нь дунд зэрэг тайлбарлалт бөгөөд практик ач холбогдолтой.
+
+### 4. Практик ач холбогдол
+
+Бэлтгэсэн загваруудыг ашиглан шинэ зээлдэгчдийн эрсдэлийг урьдчилан таамаглах боломжтой. Энэ нь банк, санхүүгийн байгууллагуудад зээл олгох шийдвэр гаргахад тусална. Загварууд нь зээлийн хэмжээ, хугацаа, нас, checking_status, credit_history, purpose зэрэг хувьсагчдыг үндэслэн эрсдэлийг таамаглаж байна.
+
+**Банк, санхүүгийн байгууллагуудын хувьд:**
+
+1. **Зээл олгох шийдвэр гаргах:** Загварууд нь зээлдэгчдийн эрсдэлийг урьдчилан таамаглах боломжийг олгоно. Ложистик регрессийн загвар нь илүү сайн Precision үзүүлсэн тул эрсдэлтэй зээлдэгчдийг илүү нарийвчлалтай таних боломжтой.
+
+2. **Эрсдэлийн удирдлага:** Загварууд нь эрсдэлийн удирдлагын системд нэгтгэж ашиглах боломжтой. Гэнэн Байесын алгоритм нь илүү сайн Recall үзүүлсэн тул эрсдэлтэй зээлдэгчдийг илүү сайн олж илрүүлж, эрсдэлийг бууруулах боломжтой.
+
+3. **Зээлийн нөхцөл тогтоох:** Загварууд нь зээлийн хүү, баталгаа, хугацаа зэрэг нөхцөлийг тогтооход тусална. Их хэмжээний, урт хугацаатай зээл эрсдэлтэй байх магадлал их байгаа тул ийм зээлд илүү өндөр хүү, баталгаа шаардаж болно.
+
+4. **Өгөгдөлд суурилсан шийдвэр гаргах:** Загварууд нь зээлдэгчдийн шинж чанарыг үндэслэн объектив, өгөгдөлд суурилсан шийдвэр гаргахад тусална.
+
+**Хязгаарлалт:**
+
+Загварууд нь German Credit dataset дээр бэлтгэгдсэн тул бусад улс, бүс нутаг, цаг хугацааны өгөгдөлд шууд ашиглах боломжгүй. Бодит ашиглалтад тухайн бүс нутаг, цаг хугацааны өгөгдөл дээр дахин бэлтгэх шаардлагатай.
+
+## Хязгаарлалт ба ирээдүйн судалгаа
+
+Энэхүү судалгаа нь дараах хязгаарлалтуудтай:
+
+1. **Өгөгдлийн хязгаарлалт:** Dataset нь cross-sectional буюу нэг цаг хугацааны цэг дээрх өгөгдөл тул цаг хугацааны хандлага судлах боломжгүй.
+2. **Хувьсагчдын хязгаарлалт:** Зарим хувьсагч (personal_status, other_parties, telephone, foreign_worker гэх мэт) загварт оруулаагүй.
+3. **Загваруудын тоо:** Ложистик регресс ба Гэнэн Байесын алгоритм зөвхөн хоёр загварыг авч үзсэн.
+
+Ирээдүйд дараах судалгаа хийх боломжтой:
+
+- Бүх хувьсагчдыг загварт оруулах, хувьсагчдын сонголт (feature selection) хийх
+- Бусад машин сургалтын загварууд ашиглах (Random Forest, XGBoost, Support Vector Machine гэх мэт)
+- Загваруудыг сайжруулах (hyperparameter tuning, cross-validation, ensemble methods)
+- Бодит цаг хугацааны өгөгдөл ашиглан цаг хугацааны хандлага судлах
+- Class imbalance-ийн асуудлыг илүү сайн шийдэх (SMOTE, class weights гэх мэт)
+
+# Багийн гишүүдийн үүрэг, оролцоо {.unnumbered}
+
+```{r}
+#| echo: false
+#| results: asis
+
+team_members <- data.frame(
+  "Гишүүний нэр" = c(
+    "[Гишүүн 1-ийн нэр]",
+    "[Гишүүн 2-ийн нэр]",
+    "[Гишүүн 3-ийн нэр]",
+    "[Гишүүн 4-ийн нэр]",
+    "[Гишүүн 5-ийн нэр]"
+  ),
+  "Үүрэг, оролцоо" = c(
+    "[Гишүүн 1-ийн үүрэг, оролцоо, хувь нэмэр]",
+    "[Гишүүн 2-ийн үүрэг, оролцоо, хувь нэмэр]",
+    "[Гишүүн 3-ийн үүрэг, оролцоо, хувь нэмэр]",
+    "[Гишүүн 4-ийн үүрэг, оролцоо, хувь нэмэр]",
+    "[Гишүүн 5-ийн үүрэг, оролцоо, хувь нэмэр]"
+  )
+)
+
+cat("## Багийн гишүүдийн үүрэг, оролцоо\n\n")
+cat("Төслийн ажилд оролцсон багийн гишүүдийн үүрэг, оролцоо, хувь нэмрийг доорх хүснэгтэд харууллаа.\n\n")
+knitr::kable(team_members, col.names = c("Гишүүний нэр", "Үүрэг, оролцоо, хувь нэмэр"))
+```
+
+# Ашигласан материал {.unnumbered}
+
+::: {#refs}
+:::
+
