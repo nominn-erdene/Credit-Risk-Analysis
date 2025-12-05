@@ -4,8 +4,6 @@ _files/
 *.qmd.bak
 *.qmd.knit.md
 
-# PDF (үүсгэсэн тайлан)
-Report.pdf
 
 # R
 .Rhistory
