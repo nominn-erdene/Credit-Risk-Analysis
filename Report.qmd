@@ -87,7 +87,7 @@ if (!dir.exists(output_dir)) {
 #| warning: false
 
 # Бүх шаардлагатай R багцуудыг эхэнд ачаалах
-required_packages <- c("caret", "pROC", "e1071", "PRROC", "Cairo", "knitr")
+required_packages <- c("caret", "pROC", "e1071", "PRROC", "Cairo", "knitr", "rpart", "rpart.plot")
 
 for (pkg in required_packages) {
   if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
@@ -695,9 +695,116 @@ conclusion <- append(conclusion,
 )
 ```
 
+## Шийдвэрийн мод (Decision Tree)
+
+Шийдвэрийн мод нь өгөгдлийг рекурсив байдлаар хувааж, ангиллын дүрмийг бүтээдэг статистик арга юм. Шийдвэрийн мод нь хувьсагчдын хоорондын хамаарлыг ойлгоход хялбар, тайлбарлахад тохиромжтой загвар юм.
+
+Шийдвэрийн мод нь дараах алхмуудыг дагана:
+1. **Мод бүтээх:** Өгөгдлийг хувьсагчдын утгаар хувааж, мод бүтээнэ
+2. **Мод тайруулах (Pruning):** Модыг хэт их бүтээхээс сэргийлж, илүүдэл мөчрүүдийг тайруулна
+3. **Таамаглах:** Шинэ өгөгдлийг модоор дамжуулж ангилна
+
+Шийдвэрийн мод нь Gini impurity эсвэл entropy ашиглан хуваалтыг сонгодог. Gini impurity:
+
+$$Gini(D) = 1 - \sum_{i=1}^{c} p_i^2$$
+
+Энд $p_i$ нь ангилал $i$-ийн магадлал, $c$ нь ангиллын тоо юм.
+
+```{r}
+#| warning: false
+
+# Шийдвэрийн мод (Decision Tree)
+
+# Хувьсагчдыг сонгох (ложистик регрессийн адил)
+dt_formula_vars <- "risk_binary ~ credit_amount + duration + age + installment_commitment + residence_since + existing_credits + num_dependents"
+
+# Категори хувьсагч (ложистик регрессийн адил)
+important_categorical_dt <- c("checking_status", "credit_history", "purpose", "savings_status", 
+                              "employment", "property_magnitude", "housing")
+
+for (var in important_categorical_dt) {
+  if (var %in% colnames(train_data)) {
+    dt_formula_vars <- paste(dt_formula_vars, "+", var)
+  }
+}
+
+# Шийдвэрийн мод бэлтгэх (training set дээр)
+# cp (complexity parameter) нь модны нарийвчлалыг хянадаг
+model_decision_tree <- rpart(
+  formula = as.formula(dt_formula_vars),
+  data = train_data,
+  method = "class",
+  control = rpart.control(
+    cp = 0.001,  # Complexity parameter
+    minsplit = 20,  # Хамгийн багадаа 20 ажиглалт байх ёстой
+    minbucket = 7,  # Хамгийн багадаа 7 ажиглалт байх ёстой
+    maxdepth = 10  # Хамгийн ихдээ 10 түвшин
+  )
+)
+
+# Модны хураангуй
+print(model_decision_tree)
+cat("\n")
+
+# Модны нарийвчлал (training set дээр)
+dt_pred_train <- predict(model_decision_tree, train_data, type = "class")
+dt_accuracy_train <- mean(dt_pred_train == train_data$risk_binary)
+cat("Шийдвэрийн модны нарийвчлал (training set):", round(dt_accuracy_train * 100, 2), "%\n")
+
+# Загварын магадлал (test set дээр)
+dt_pred_test_proba <- predict(model_decision_tree, test_data, type = "prob")
+dt_pred_test_proba_risk <- dt_pred_test_proba[, "Эрсдэлтэй"]
+
+# ROC curve ба optimal threshold
+roc_dt <- roc(test_data$risk_binary, dt_pred_test_proba_risk, quiet = TRUE)
+auc_dt <- auc(roc_dt)
+cat("AUC-ROC:", round(as.numeric(auc_dt), 4), "\n")
+
+# Optimal threshold
+optimal_threshold_dt <- coords(roc_dt, "best", ret = "threshold", best.method = "youden")$threshold
+cat("Optimal threshold:", round(optimal_threshold_dt, 4), "\n")
+
+# Threshold optimization ашиглан таамаглал
+dt_pred_test <- ifelse(dt_pred_test_proba_risk > optimal_threshold_dt, "Эрсдэлтэй", "Эрсдэлгүй")
+dt_accuracy <- mean(dt_pred_test == test_data$risk_binary)
+
+cat("Шийдвэрийн модны нарийвчлал (test set, optimal threshold):", round(dt_accuracy * 100, 2), "%\n")
+
+# Confusion matrix
+dt_cm <- table(Бодит = test_data$risk_binary, Таамаглал = dt_pred_test)
+cat("\nConfusion Matrix:\n")
+print(dt_cm)
+
+# Precision, Recall, F1-score
+if (nrow(dt_cm) == 2 && ncol(dt_cm) == 2) {
+  tp <- dt_cm[2, 2]  # True Positive
+  fp <- dt_cm[1, 2]  # False Positive
+  fn <- dt_cm[2, 1]  # False Negative
+  tn <- dt_cm[1, 1]  # True Negative
+  
+  dt_precision <- tp / (tp + fp)
+  dt_recall <- tp / (tp + fn)
+  dt_f1_score <- 2 * (dt_precision * dt_recall) / (dt_precision + dt_recall)
+  
+  cat("\nPrecision (Нарийвчлал):", round(dt_precision, 4), "\n")
+  cat("Recall (Сэргээлт):", round(dt_recall, 4), "\n")
+  cat("F1-score:", round(dt_f1_score, 4), "\n")
+}
+```
+
+```{r}
+conclusion <- append(conclusion,
+  sprintf(
+    r"(Шийдвэрийн мод зээлийн эрсдэлийг таамаглахад test set дээр %.2f%% нарийвчлалтай байна. 
+    AUC-ROC = %.4f. Optimal threshold = %.4f ашигласан.)",
+    dt_accuracy * 100, as.numeric(auc_dt), optimal_threshold_dt
+  )
+)
+```
+
 # Загваруудын харьцуулалт
 
-Ложистик регресс ба Гэнэн Байесын алгоритм загваруудын гүйцэтгэлийг харьцуулна.
+Ложистик регресс, Гэнэн Байесын алгоритм, Шийдвэрийн мод загваруудын гүйцэтгэлийг харьцуулна.
 
 ```{r}
 #| label: tbl-model-comparison
@@ -722,26 +829,39 @@ nb_metrics <- c(
   "N/A"
 )
 
+dt_metrics <- c(
+  round(dt_accuracy * 100, 2),
+  if(exists("auc_dt")) round(as.numeric(auc_dt), 4) else NA,
+  if(exists("dt_precision")) round(dt_precision, 4) else NA,
+  if(exists("dt_recall")) round(dt_recall, 4) else NA,
+  if(exists("dt_f1_score")) round(dt_f1_score, 4) else NA,
+  "N/A"
+)
+
 model_comparison <- data.frame(
-  "Загвар" = c("Ложистик регресс", "Гэнэн Байес"),
-  "Нарийвчлал (%)" = c(logistic_metrics[1], nb_metrics[1]),
+  "Загвар" = c("Ложистик регресс", "Гэнэн Байес", "Шийдвэрийн мод"),
+  "Нарийвчлал (%)" = c(logistic_metrics[1], nb_metrics[1], dt_metrics[1]),
   "AUC-ROC" = c(
     if(!is.na(logistic_metrics[2])) logistic_metrics[2] else "N/A",
-    if(!is.na(nb_metrics[2])) nb_metrics[2] else "N/A"
+    if(!is.na(nb_metrics[2])) nb_metrics[2] else "N/A",
+    if(!is.na(dt_metrics[2])) dt_metrics[2] else "N/A"
   ),
   "Precision" = c(
     if(!is.na(logistic_metrics[3])) logistic_metrics[3] else "N/A",
-    if(!is.na(nb_metrics[3])) nb_metrics[3] else "N/A"
+    if(!is.na(nb_metrics[3])) nb_metrics[3] else "N/A",
+    if(!is.na(dt_metrics[3])) dt_metrics[3] else "N/A"
   ),
   "Recall" = c(
     if(!is.na(logistic_metrics[4])) logistic_metrics[4] else "N/A",
-    if(!is.na(nb_metrics[4])) nb_metrics[4] else "N/A"
+    if(!is.na(nb_metrics[4])) nb_metrics[4] else "N/A",
+    if(!is.na(dt_metrics[4])) dt_metrics[4] else "N/A"
   ),
   "F1-score" = c(
     if(!is.na(logistic_metrics[5])) logistic_metrics[5] else "N/A",
-    if(!is.na(nb_metrics[5])) nb_metrics[5] else "N/A"
+    if(!is.na(nb_metrics[5])) nb_metrics[5] else "N/A",
+    if(!is.na(dt_metrics[5])) dt_metrics[5] else "N/A"
   ),
-  "R² / McFadden R²" = c(logistic_metrics[6], nb_metrics[6])
+  "R² / McFadden R²" = c(logistic_metrics[6], nb_metrics[6], dt_metrics[6])
 )
 
 knitr::kable(model_comparison, col.names = c("Загвар", "Нарийвчлал (%)", "AUC-ROC", "Precision", "Recall", "F1-score", "R² / McFadden R²"))
@@ -789,10 +909,12 @@ Cairo::CairoPDF(
 par(mfrow = c(1, 1))
 plot(roc_logistic, col = "blue", main = "ROC Curve", lwd = 2)
 lines(roc_nb, col = "red", lwd = 2)
+lines(roc_dt, col = "green", lwd = 2)
 legend("bottomright", 
        legend = c(paste("Ложистик регресс (AUC =", round(as.numeric(auc_logistic), 3), ")"),
-                 paste("Гэнэн Байес (AUC =", round(as.numeric(auc_nb), 3), ")")),
-       col = c("blue", "red"), lwd = 2)
+                 paste("Гэнэн Байес (AUC =", round(as.numeric(auc_nb), 3), ")"),
+                 paste("Шийдвэрийн мод (AUC =", round(as.numeric(auc_dt), 3), ")")),
+       col = c("blue", "red", "green"), lwd = 2)
 abline(a = 0, b = 1, lty = 2, col = "gray")
 
 dev.off()
@@ -824,6 +946,11 @@ pr_nb <- pr.curve(scores.class0 = (1 - nb_pred_test_proba_risk)[test_data$risk_b
                   scores.class1 = nb_pred_test_proba_risk[test_data$risk_binary == "Эрсдэлтэй"],
                   curve = TRUE)
 
+# dt_pred_test_proba_risk нь "Эрсдэлтэй" байх магадлал (positive class)
+pr_dt <- pr.curve(scores.class0 = (1 - dt_pred_test_proba_risk)[test_data$risk_binary == "Эрсдэлгүй"],
+                  scores.class1 = dt_pred_test_proba_risk[test_data$risk_binary == "Эрсдэлтэй"],
+                  curve = TRUE)
+
 Cairo::CairoPDF(
   file = file.path(output_dir, "fig-pr-curves.pdf"),
   family = "Times New Roman", width = 8, height = 6
@@ -831,10 +958,12 @@ Cairo::CairoPDF(
 
 plot(pr_logistic, col = "blue", main = "Precision-Recall Curve", lwd = 2)
 lines(pr_nb$curve[, 1], pr_nb$curve[, 2], col = "red", lwd = 2)
+lines(pr_dt$curve[, 1], pr_dt$curve[, 2], col = "green", lwd = 2)
 legend("bottomleft", 
        legend = c(paste("Ложистик регресс (AUC =", round(pr_logistic$auc.integral, 3), ")"),
-                 paste("Гэнэн Байес (AUC =", round(pr_nb$auc.integral, 3), ")")),
-       col = c("blue", "red"), lwd = 2)
+                 paste("Гэнэн Байес (AUC =", round(pr_nb$auc.integral, 3), ")"),
+                 paste("Шийдвэрийн мод (AUC =", round(pr_dt$auc.integral, 3), ")")),
+       col = c("blue", "red", "green"), lwd = 2)
 
 dev.off()
 ```
@@ -849,11 +978,12 @@ knitr::include_graphics(file.path(output_dir, "fig-pr-curves.pdf"))
 ```{r}
 conclusion <- append(conclusion,
   sprintf(
-    r"(Ложистик регресс ба Гэнэн Байесын алгоритм загварууд зээлийн эрсдэлийг таамаглахад test set дээр
-    тус тус %.2f%% (AUC=%.4f) ба %.2f%% (AUC=%.4f) нарийвчлалтай байна. 
+    r"(Ложистик регресс, Гэнэн Байесын алгоритм, Шийдвэрийн мод загварууд зээлийн эрсдэлийг таамаглахад test set дээр
+    тус тус %.2f%% (AUC=%.4f), %.2f%% (AUC=%.4f), %.2f%% (AUC=%.4f) нарийвчлалтай байна. 
     Илүү олон хувьсагч ашиглаж, optimal threshold сонгосноор загваруудын гүйцэтгэл сайжирсан.)",
     logistic_accuracy * 100, as.numeric(auc_logistic), 
-    nb_accuracy * 100, as.numeric(auc_nb)
+    nb_accuracy * 100, as.numeric(auc_nb),
+    dt_accuracy * 100, as.numeric(auc_dt)
   )
 )
 ```
@@ -918,6 +1048,9 @@ new_customers$logistic_pred <- ifelse(new_customers$logistic_prob > optimal_thre
 # Гэнэн Байесоор таамаглах
 new_customers$nb_pred <- predict(model_naive_bayes, new_customers)
 
+# Шийдвэрийн модоор таамаглах
+new_customers$dt_pred <- predict(model_decision_tree, new_customers, type = "class")
+
 # Хүснэгтэд харуулах
 prediction_table <- data.frame(
   "Зээлийн хэмжээ" = new_customers$credit_amount,
@@ -927,12 +1060,13 @@ prediction_table <- data.frame(
     new_customers$logistic_pred, 
     " (", round(new_customers$logistic_prob * 100, 1), "%)"
   ),
-  "Гэнэн Байес" = as.character(new_customers$nb_pred)
+  "Гэнэн Байес" = as.character(new_customers$nb_pred),
+  "Шийдвэрийн мод" = as.character(new_customers$dt_pred)
 )
 
 knitr::kable(
   prediction_table,
-  col.names = c("Зээлийн хэмжээ", "Хугацаа (сар)", "Нас", "Ложистик регресс (магадлал)", "Гэнэн Байес")
+  col.names = c("Зээлийн хэмжээ", "Хугацаа (сар)", "Нас", "Ложистик регресс (магадлал)", "Гэнэн Байес", "Шийдвэрийн мод")
 )
 ```
 
@@ -1011,12 +1145,18 @@ cat(sprintf("- **Гэнэн Байес:** %.2f%% нарийвчлал, AUC-ROC =
 if(exists("nb_precision") && exists("nb_recall") && exists("nb_f1_score")) {
   cat(sprintf(", Precision = %.4f, Recall = %.4f, F1 = %.4f", nb_precision, nb_recall, nb_f1_score))
 }
+cat("\n")
+cat(sprintf("- **Шийдвэрийн мод:** %.2f%% нарийвчлал, AUC-ROC = %.4f", 
+            dt_accuracy * 100, as.numeric(auc_dt)))
+if(exists("dt_precision") && exists("dt_recall") && exists("dt_f1_score")) {
+  cat(sprintf(", Precision = %.4f, Recall = %.4f, F1 = %.4f", dt_precision, dt_recall, dt_f1_score))
+}
 cat("\n\n")
 ```
 
 **Загваруудын харьцуулалт:**
 
-Ложистик регрессийн загвар нь Гэнэн Байесын алгоритмаас илүү сайн гүйцэтгэл үзүүлсэн. Ложистик регресс нь 74.33% нарийвчлал, 0.7987 AUC-ROC утгатай байхад, Гэнэн Байес нь 67.00% нарийвчлал, 0.7784 AUC-ROC утгатай байна. Ложистик регресс нь илүү сайн Precision (0.5496) үзүүлсэн бөгөөд энэ нь эрсдэлтэй гэж таамагласан зээлдэгчдийн дунд бодитоор эрсдэлтэй байх хувь их байгааг илтгэж байна. Гэнэн Байесын алгоритм нь илүү сайн Recall (0.9000) үзүүлсэн бөгөөд энэ нь бодит эрсдэлтэй зээлдэгчдийг илүү сайн олж илрүүлж байгааг харуулж байна.
+Гурван загваруудын дунд Ложистик регрессийн загвар нь хамгийн сайн гүйцэтгэл үзүүлсэн. Ложистик регресс нь хамгийн өндөр нарийвчлал, AUC-ROC утгатай байхад, Гэнэн Байес нь хамгийн сайн Recall үзүүлсэн бөгөөд энэ нь бодит эрсдэлтэй зээлдэгчдийг илүү сайн олж илрүүлж байгааг харуулж байна. Шийдвэрийн мод нь тайлбарлахад хялбар, ойлгоход тохиромжтой загвар бөгөөд практик ашиглалтад тохиромжтой.
 
 McFadden R² = 0.2336 утга нь ложистик регрессийн загвар нь null загвараас 23.36% илүү сайн тайлбарлалт өгч байгааг илтгэж байна. Энэ нь дунд зэрэг тайлбарлалт бөгөөд практик ач холбогдолтой.
 
@@ -1038,13 +1178,39 @@ McFadden R² = 0.2336 утга нь ложистик регрессийн заг
 
 Загварууд нь German Credit dataset дээр бэлтгэгдсэн тул бусад улс, бүс нутаг, цаг хугацааны өгөгдөлд шууд ашиглах боломжгүй. Бодит ашиглалтад тухайн бүс нутаг, цаг хугацааны өгөгдөл дээр дахин бэлтгэх шаардлагатай.
 
+### 5. Зөвлөмж
+
+Энэхүү судалгааны үр дүнд үндэслэн дараах зөвлөмжүүдийг санал болгож байна:
+
+**Банк, санхүүгийн байгууллагуудад:**
+
+1. **Машин сургалтын загваруудыг зээлийн шийдвэр гаргах системд нэгтгэх:** Ложистик регрессийн загвар нь 74.33% нарийвчлал, 0.7987 AUC-ROC утгатай байгаа тул зээл олгох шийдвэр гаргахад ашиглах боломжтой. Гэхдээ загваруудыг тухайн бүс нутаг, цаг хугацааны өгөгдөл дээр дахин бэлтгэх шаардлагатай.
+
+2. **Хувьсагчдын ач холбогдлыг харгалзан зээлийн үнэлгээний системд ашиглах:** Корреляцийн шинжилгээний үр дүнгээс харахад зээлийн хэмжээ, хугацаа, нас, checking_status, credit_history, purpose зэрэг хувьсагчдын эрсдэлтэй статистик ач холбогдолтой холбоо байгаа тул эдгээр хувьсагчдыг зээлийн үнэлгээний системд чухал үзүүлэлт болгон ашиглах нь зөв.
+
+3. **Загваруудыг тогтмол шинэчлэх:** Өгөгдөл, эдийн засгийн нөхцөл байдал өөрчлөгдөх тусам загваруудыг дахин бэлтгэж, шинэчлэх шаардлагатай. Энэ нь загваруудын нарийвчлалыг хадгалахад тусална.
+
+4. **Олон загварын хослол ашиглах:** Ложистик регресс нь илүү сайн Precision үзүүлсэн бөгөөд Гэнэн Байес нь илүү сайн Recall үзүүлсэн тул хоёр загварыг хослуулан ашиглах нь илүү сайн үр дүн өгөх боломжтой.
+
+5. **Class imbalance-ийн асуудлыг шийдэх:** Dataset дээр эрсдэлтэй зээлийн хувь 30% байгаа тул class imbalance-ийн асуудлыг шийдэхийн тулд SMOTE, class weights зэрэг аргуудыг ашиглах нь зөв.
+
+**Ирээдүйн судалгаанд:**
+
+1. **Илүү олон хувьсагч ашиглах:** Зарим хувьсагч (personal_status, other_parties, telephone, foreign_worker гэх мэт) загварт оруулаагүй тул эдгээр хувьсагчдыг загварт оруулж, хувьсагчдын сонголт (feature selection) хийх нь зөв.
+
+2. **Бусад машин сургалтын загварууд ашиглах:** Random Forest, XGBoost, Support Vector Machine зэрэг бусад машин сургалтын загваруудыг ашиглаж, загваруудын гүйцэтгэлийг харьцуулах нь зөв.
+
+3. **Загваруудыг сайжруулах:** Hyperparameter tuning, cross-validation, ensemble methods зэрэг аргуудыг ашиглаж, загваруудын гүйцэтгэлийг сайжруулах нь зөв.
+
+4. **Цаг хугацааны хандлага судлах:** Бодит цаг хугацааны өгөгдөл ашиглан цаг хугацааны хандлага судлах нь зөв.
+
 ## Хязгаарлалт ба ирээдүйн судалгаа
 
 Энэхүү судалгаа нь дараах хязгаарлалтуудтай:
 
 1. **Өгөгдлийн хязгаарлалт:** Dataset нь cross-sectional буюу нэг цаг хугацааны цэг дээрх өгөгдөл тул цаг хугацааны хандлага судлах боломжгүй.
 2. **Хувьсагчдын хязгаарлалт:** Зарим хувьсагч (personal_status, other_parties, telephone, foreign_worker гэх мэт) загварт оруулаагүй.
-3. **Загваруудын тоо:** Ложистик регресс ба Гэнэн Байесын алгоритм зөвхөн хоёр загварыг авч үзсэн.
+3. **Загваруудын тоо:** Ложистик регресс, Гэнэн Байесын алгоритм, Шийдвэрийн мод гэсэн гурван статистик загварыг авч үзсэн.
 
 Ирээдүйд дараах судалгаа хийх боломжтой:
 
